@@ -374,7 +374,12 @@ export class IntuneUploader {
       // Graph rejects a Win32LobApp create request with no detection rules
       // ("must have at least one detection rule specified") - detectionRules
       // must be present in the initial POST, not added afterward via PATCH.
-      rules: [], // requirement rules are still added later via addDetectionRules()
+      // Graph also rejects the request if the legacy `rules` property is
+      // present at all alongside `detectionRules` ("Conflicting rules have
+      // been defined between the Rules property and the DetectionRules
+      // property"), even when `rules` is an empty array - so it must be
+      // omitted entirely here. Requirement rules are still added later via
+      // addDetectionRules(), which uses `rules` (not `detectionRules`).
       detectionRules: this.buildDetectionRules(job),
     };
 
