@@ -202,7 +202,7 @@ export class IntuneUploader {
 
     // Step 1: Create Win32 LOB App (5%)
     await onProgress?.(5, 'Creating app in Intune...');
-    const app = await this.createWin32App(graphClient, job);
+    const app = await this.createWin32App(graphClient, job, path.basename(encryptedContentPath));
     this.logger.info('Created Win32 LOB App', { appId: app.id });
 
     // Step 2: Create content version (10%)
@@ -333,7 +333,8 @@ export class IntuneUploader {
    */
   private async createWin32App(
     graphClient: GraphClient,
-    job: PackagingJob
+    job: PackagingJob,
+    fileName: string
   ): Promise<{ id: string }> {
     const commands = this.buildCommandLines(job);
     const baseDescription = extractPackageDescription(
@@ -360,6 +361,7 @@ export class IntuneUploader {
       minimumSupportedWindowsRelease: 'v10_1903',
       runAs32Bit: false,
       setupFilePath: 'Invoke-AppDeployToolkit.exe',
+      fileName,
       installExperience: {
         runAsAccount: job.install_scope === 'user' ? 'user' : 'system',
         deviceRestartBehavior: 'suppress',
