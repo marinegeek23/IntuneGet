@@ -358,7 +358,7 @@ export class IntuneUploader {
       installCommandLine: commands.install,
       uninstallCommandLine: commands.uninstall,
       applicableArchitectures: this.mapArchitecture(job.architecture),
-      minimumSupportedWindowsRelease: 'v10_1903',
+      minimumSupportedWindowsRelease: '1903',
       runAs32Bit: false,
       setupFilePath: 'Invoke-AppDeployToolkit.exe',
       fileName,
