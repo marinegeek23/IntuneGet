@@ -29,6 +29,7 @@ import type {
 } from '@/types/update-policies';
 import type { Json } from '@/types/database';
 import { isSelfUpdatingApp } from '@/lib/self-updating-apps';
+import { triggerUpdatesSqlite } from '@/lib/updates/sqlite-trigger';
 
 // Batches of up to 10 apps run sequentially (DB lookups, job creation, and a
 // workflow dispatch each); the platform default duration times out mid-batch
@@ -74,23 +75,21 @@ export async function POST(request: NextRequest) {
     }
 
     if (!isSupabaseConfigured()) {
-      const unavailableError =
-        'Update deployment requires Supabase and is not available on this self-hosted deployment';
-      return NextResponse.json(
-        {
-          success: false,
-          triggered: 0,
-          failed: updateRequests.length,
-          results: updateRequests.map((req) => ({
-            winget_id: req.winget_id,
-            tenant_id: req.tenant_id,
-            success: false,
-            error: unavailableError,
-          })),
-          error: unavailableError,
-        },
-        { status: 503 }
+      // Self-hosted sqlite mode has no app_update_policies/AutoUpdateTrigger,
+      // but an update is just the normal packaging job for a newer version
+      // reusing the original deployment's configuration - which needs neither.
+      const sqliteResults = await triggerUpdatesSqlite(
+        updateRequests,
+        user.userId,
+        user.userEmail ?? null
       );
+      const triggered = sqliteResults.filter((r) => r.success).length;
+      return NextResponse.json({
+        success: triggered > 0,
+        triggered,
+        failed: sqliteResults.length - triggered,
+        results: sqliteResults,
+      });
     }
 
     const supabase = createServerClient();

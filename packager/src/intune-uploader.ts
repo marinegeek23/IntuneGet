@@ -371,7 +371,13 @@ export class IntuneUploader {
         { returnCode: 1641, type: 'hardReboot' },
         { returnCode: 1618, type: 'retry' },
       ],
-      rules: [], // Will add detection/requirement rules later
+      // Graph rejects a Win32LobApp create request with no detection rules
+      // ("must have at least one detection rule specified") - detectionRules
+      // must be present in the initial POST, not added afterward via PATCH.
+      // addDetectionRules() still runs later (Step 9) to attach requirement
+      // rules for Update Only mode; re-patching the same detection rules
+      // there is harmless.
+      detectionRules: this.buildDetectionRules(job),
     };
 
     if (largeIcon) {

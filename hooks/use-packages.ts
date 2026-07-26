@@ -23,6 +23,14 @@ interface CatalogPackageResponse {
 }
 
 interface ManifestResponse {
+  // The resolved manifest. `manifest.version` is the version `installers`
+  // belongs to, which is not necessarily the catalog's latest_version.
+  manifest?: {
+    id: string;
+    name: string;
+    publisher: string;
+    version: string;
+  };
   installers: NormalizedInstaller[];
   recommendedInstaller?: NormalizedInstaller;
   versions?: string[];

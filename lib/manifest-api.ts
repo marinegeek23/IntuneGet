@@ -31,6 +31,12 @@ function githubReadHeaders(accept: string): Record<string, string> {
 const manifestCache = new Map<string, { data: WingetManifest; timestamp: number }>();
 const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
+// Version lists are resolved live (see fetchAvailableVersions), so memoise them
+// to keep a page that renders many packages from issuing one GitHub request per
+// package on every render.
+const versionsCache = new Map<string, { versions: string[]; timestamp: number }>();
+const VERSIONS_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
 // Supabase client for server-side operations
 function getSupabaseClient() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
@@ -72,17 +78,40 @@ function getManifestPaths(wingetId: string) {
  * Priority: Supabase version_history -> GitHub API
  */
 export async function fetchAvailableVersions(wingetId: string): Promise<string[]> {
-  // Try the catalog first
+  // Live winget-pkgs is authoritative and the catalog snapshot lags it by days,
+  // so consult live first. Trusting the catalog here meant new deployments
+  // silently shipped an outdated release whenever a package had been updated
+  // since the snapshot was generated - the opposite of what this tool is for.
+  // Results are memoised briefly so a page listing many apps costs one lookup
+  // each, and the catalog still backstops any live failure.
+  const cached = versionsCache.get(wingetId);
+  if (cached && Date.now() - cached.timestamp < VERSIONS_CACHE_TTL) {
+    return cached.versions;
+  }
+
+  try {
+    const live = await fetchAvailableVersionsLive(wingetId);
+    if (live.length > 0) {
+      versionsCache.set(wingetId, { versions: live, timestamp: Date.now() });
+      return live;
+    }
+  } catch (error) {
+    console.warn(`Live version lookup failed for ${wingetId}, falling back to catalog:`, error);
+  }
+
+  // Fall back to the catalog when live is unavailable (offline, rate limited,
+  // or the package genuinely isn't in winget-pkgs under this id).
   try {
     const versions = await getCatalogSource().getVersions(wingetId);
     if (versions.length > 0) {
+      versionsCache.set(wingetId, { versions, timestamp: Date.now() });
       return versions;
     }
   } catch (error) {
-    console.warn(`Supabase version lookup failed for ${wingetId}:`, error);
+    console.warn(`Catalog version lookup failed for ${wingetId}:`, error);
   }
 
-  return fetchAvailableVersionsLive(wingetId);
+  return [];
 }
 
 /**
@@ -116,6 +145,10 @@ export async function fetchAvailableVersionsLive(wingetId: string): Promise<stri
     const versions = dirs
       .filter((d: { type: string }) => d.type === 'dir')
       .map((d: { name: string }) => d.name)
+      // Sibling package IDs (e.g. Google.Chrome.Beta, Google.Chrome.EXE) nest
+      // under the same parent directory and show up as entries here too.
+      // Real winget version directories always start with a digit.
+      .filter((name: string) => /^\d/.test(name))
       .sort((a: string, b: string) =>
         b.localeCompare(a, undefined, { numeric: true })
       );
@@ -446,11 +479,31 @@ export async function getFullManifest(
     // Fetch all manifests in parallel, then finish the locale resolution
     // with the already-fetched version manifest so the common case (en-US
     // locale with a description) costs no extra request
-    const [installerManifest, enUSLocale, versionManifest] = await Promise.all([
+    let [installerManifest, enUSLocale, versionManifest] = await Promise.all([
       fetchInstallerManifest(wingetId, targetVersion),
       fetchLocaleFile(wingetId, targetVersion, 'en-US'),
       fetchVersionManifest(wingetId, targetVersion),
     ]);
+
+    // A cached catalog entry can point at a version whose manifest has since
+    // been pruned/superseded upstream (fast-moving packages like browsers
+    // ship faster than the self-hosted snapshot refreshes). Retry once
+    // against a live GitHub version lookup before giving up.
+    if (!installerManifest) {
+      const liveVersions = await fetchAvailableVersionsLive(wingetId);
+      const liveTarget = liveVersions[0];
+      if (liveTarget && liveTarget !== targetVersion) {
+        console.warn(
+          `Catalog version ${targetVersion} for ${wingetId} not found upstream, retrying with live version ${liveTarget}`
+        );
+        targetVersion = liveTarget;
+        [installerManifest, enUSLocale, versionManifest] = await Promise.all([
+          fetchInstallerManifest(wingetId, targetVersion),
+          fetchLocaleFile(wingetId, targetVersion, 'en-US'),
+          fetchVersionManifest(wingetId, targetVersion),
+        ]);
+      }
+    }
 
     if (!installerManifest) {
       return null;
@@ -732,6 +785,7 @@ export async function getBestInstaller(
  */
 export function clearManifestCache(): void {
   manifestCache.clear();
+  versionsCache.clear();
 }
 
 /**

@@ -4,8 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
-import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
+import { resolveTenantForRequest, hasActiveTenantConsent } from '@/lib/msp/tenant-resolution';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { getServicePrincipalToken } from '@/lib/intune/graph-client';
 import type { IntuneWin32App } from '@/types/inventory';
@@ -23,11 +22,9 @@ export async function GET(request: NextRequest) {
     }
 
     // Get the service principal access token from the database
-    const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -39,14 +36,7 @@ export async function GET(request: NextRequest) {
 
     const tenantId = tenantResolution.tenantId;
 
-    const { data: consentData, error: consentError } = await supabase
-      .from('tenant_consent')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .eq('is_active', true)
-      .single();
-
-    if (consentError || !consentData) {
+    if (!(await hasActiveTenantConsent(tenantId))) {
       return NextResponse.json(
         { error: 'Admin consent not found. Please complete the admin consent flow.' },
         { status: 403 }

@@ -134,10 +134,20 @@ function initializeSchema(db: Database.Database): void {
       intune_app_id TEXT NOT NULL,
       intune_app_url TEXT,
       intune_tenant_id TEXT,
+      app_source TEXT DEFAULT 'win32',
       deployed_at TEXT NOT NULL DEFAULT (datetime('now')),
       FOREIGN KEY (packaging_job_id) REFERENCES packaging_jobs(id)
     )
   `);
+
+  // upload_history gained app_source after the first release; add it to
+  // databases created before then so the column matches UploadHistoryRecord.
+  const historyColumns = new Set(
+    (db.prepare('PRAGMA table_info(upload_history)').all() as { name: string }[]).map((c) => c.name)
+  );
+  if (!historyColumns.has('app_source')) {
+    db.exec("ALTER TABLE upload_history ADD COLUMN app_source TEXT DEFAULT 'win32'");
+  }
 
   // Create index for upload_history
   db.exec(`
@@ -472,8 +482,8 @@ export const sqliteDb: DatabaseAdapter = {
       const stmt = database.prepare(`
         INSERT INTO upload_history (
           id, packaging_job_id, user_id, winget_id, version, display_name,
-          publisher, intune_app_id, intune_app_url, intune_tenant_id, deployed_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          publisher, intune_app_id, intune_app_url, intune_tenant_id, app_source, deployed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
       stmt.run(
@@ -487,6 +497,7 @@ export const sqliteDb: DatabaseAdapter = {
         record.intune_app_id,
         record.intune_app_url || null,
         record.intune_tenant_id || null,
+        record.app_source || 'win32',
         record.deployed_at || now
       );
 

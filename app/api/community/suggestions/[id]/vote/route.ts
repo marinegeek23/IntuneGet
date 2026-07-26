@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { isValidUuid } from '@/lib/validators/community';
@@ -48,6 +49,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Community suggestions');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -161,6 +165,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Community suggestions');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

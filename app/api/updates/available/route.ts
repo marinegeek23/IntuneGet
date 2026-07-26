@@ -7,6 +7,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { compareVersions } from '@/lib/version-compare';
+import { computeUpdatesFromHistory } from '@/lib/updates/compute-updates';
 import type { AvailableUpdate } from '@/types/update-policies';
 
 /**
@@ -32,10 +33,18 @@ export async function GET(request: NextRequest) {
     const includeUnmanaged = searchParams.get('include_unmanaged') === 'true';
 
     if (!isSupabaseConfigured()) {
+      // Self-hosted sqlite mode has no update_check_results table - that table
+      // is only a cache of a comparison whose inputs both exist here already:
+      // upload_history (what was deployed, at which version) and the manifest
+      // API (the current version, which self-heals past a stale catalog).
+      // Compute the comparison on demand instead of reporting "no updates",
+      // which would silently leave deployed apps un-patched.
+      const updates = await computeUpdatesFromHistory(user.userId, tenantId, criticalOnly);
       return NextResponse.json({
-        updates: [],
-        count: 0,
-        criticalCount: 0,
+        updates,
+        count: updates.length,
+        criticalCount: updates.filter((u) => u.is_critical).length,
+        computed: 'live',
       });
     }
 

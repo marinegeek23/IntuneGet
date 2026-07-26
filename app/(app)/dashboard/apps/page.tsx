@@ -234,9 +234,14 @@ export default function AppCatalogPage() {
   );
 
   const isSelectedStoreApp = selectedPackage?.appSource === 'store';
+  // Deliberately does not pin the request to selectedPackage.version: that
+  // comes from the catalog snapshot's latest_version, which lags upstream and
+  // would both pair a stale version with live installers and default users to
+  // deploying an out-of-date release. Omitting it lets the manifest resolve the
+  // current version and return the installers that match it.
   const { data: manifestData, isLoading: isLoadingInstallers } = usePackageManifest(
     selectedPackage?.id || '',
-    selectedPackage?.version,
+    undefined,
     undefined,
     isSelectedStoreApp // skip manifest fetch for store apps
   );
@@ -1015,6 +1020,7 @@ export default function AppCatalogPage() {
           package={selectedPackage}
           installers={selectedInstallers}
           versions={selectedVersions}
+          manifestVersion={manifestData?.manifest?.version}
           onClose={handleCloseConfig}
           isDeployed={isSelectedDeployed}
           deployedConfig={deployedConfig}

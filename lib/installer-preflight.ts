@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { getLiveInstallers } from '@/lib/manifest-api';
+import { getLiveInstallers, fetchAvailableVersionsLive } from '@/lib/manifest-api';
 import {
   hashRemoteInstaller,
   hashesEqual,
@@ -10,6 +10,13 @@ import {
 const HEALTHY_MUTABLE_TTL_MS = 5 * 60 * 1000;
 const HEALTHY_VERSIONED_TTL_MS = 6 * 60 * 60 * 1000;
 const ERROR_TTL_MS = 60 * 1000;
+// Quarantine must expire, or a tuple that failed once can never be deployed
+// again - the entry outlives the condition that caused it. Both quarantine
+// reasons are upstream conditions that resolve on their own: MANIFEST_CHANGED
+// clears when the catalog/manifest catches up, HASH_MISMATCH clears when the
+// publisher's bytes and manifest agree again. Expiry only forces a fresh
+// download-and-verify; it never admits an installer without re-checking it.
+const QUARANTINE_TTL_MS = 30 * 60 * 1000;
 const LEASE_SECONDS = 240;
 const WAIT_FOR_CLAIM_MS = 240_000;
 const POLL_INTERVAL_MS = 1_500;
@@ -240,7 +247,7 @@ async function waitForSharedResult(cacheKey: string): Promise<InstallerPreflight
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     const row = await readHealth(cacheKey);
     if (!row) continue;
-    if (row.status === 'quarantined') throwForRow(row);
+    if (row.status === 'quarantined' && isFresh(row)) throwForRow(row);
     if (row.status === 'healthy' && isFresh(row)) {
       return {
         cacheKey,
@@ -270,6 +277,22 @@ async function performLivePreflight(
   try {
     const installers = await getLiveInstallers(input.wingetId, input.version);
     if (installers.length === 0) {
+      // Distinguish "this version was withdrawn upstream" from a transient
+      // fetch failure. Publishers that prune old manifests (browsers) leave
+      // stale cart entries pointing at versions that no longer exist, and the
+      // generic message gives the user nothing to act on. Deliberately not
+      // auto-substituting the newer version: dispatch must deploy exactly what
+      // was configured and reviewed, not silently something else.
+      const liveVersions = await fetchAvailableVersionsLive(input.wingetId).catch(() => []);
+      const current = liveVersions[0];
+      if (current && current !== input.version) {
+        throw new InstallerPreflightError(
+          'VERSION_WITHDRAWN',
+          `${input.wingetId} ${input.version} is no longer published upstream (current version is ${current}). ` +
+            `Remove this app from your cart and add it again to pick up ${current}.`,
+          false,
+        );
+      }
       throw new InstallerPreflightError(
         'MANIFEST_UNAVAILABLE',
         `The trusted WinGet installer manifest for ${input.wingetId} ${input.version} is unavailable`,
@@ -278,13 +301,25 @@ async function performLivePreflight(
     }
 
     if (!installerExistsInManifest(input, installers)) {
+      // The version's manifest exists but does not contain the tuple the caller
+      // asked for. In practice this is almost always a cart entry whose version
+      // and installer data came from different manifest reads and no longer
+      // agree - waiting for an upstream change will never resolve it, so say so
+      // rather than advising the user to retry later.
+      const liveVersions = await fetchAvailableVersionsLive(input.wingetId).catch(() => []);
+      const current = liveVersions[0];
+      const advice = current && current !== input.version
+        ? ` Remove this app from your cart and add it again (current version is ${current}).`
+        : ' Remove this app from your cart and add it again to pick up its current installer.';
+
       const error = new InstallerPreflightError(
         'MANIFEST_CHANGED',
-        `The selected installer for ${input.wingetId} ${input.version} no longer matches the trusted WinGet manifest`,
+        `The saved installer details for ${input.wingetId} ${input.version} do not match the trusted WinGet manifest.${advice}`,
       );
       await writeHealth(buildHealthRow(cacheKey, input, 'quarantined', {
         reason_code: error.code,
         reason_message: error.message,
+        expires_at: new Date(Date.now() + QUARANTINE_TTL_MS).toISOString(),
       }));
       throw error;
     }
@@ -301,6 +336,7 @@ async function performLivePreflight(
         actual_sha256: downloaded.sha256,
         reason_code: error.code,
         reason_message: error.message,
+        expires_at: new Date(Date.now() + QUARANTINE_TTL_MS).toISOString(),
       }));
       throw error;
     }
@@ -344,7 +380,7 @@ async function enforceInternal(input: InstallerPreflightRequest): Promise<Instal
   assertTrustedInput(input);
   const cacheKey = createInstallerHealthKey(input);
   const cached = await readHealth(cacheKey);
-  if (cached?.status === 'quarantined') throwForRow(cached);
+  if (cached?.status === 'quarantined' && isFresh(cached)) throwForRow(cached);
   if (cached?.status === 'healthy' && isFresh(cached)) {
     return {
       cacheKey,

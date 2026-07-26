@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import {
@@ -59,6 +60,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
     }
 
     const { role: newRole, access_mode: newAccessMode } = validation.data;
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -236,6 +240,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

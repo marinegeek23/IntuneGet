@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { sendTestEmail, isEmailConfigured } from '@/lib/email/service';
@@ -30,6 +31,18 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Notification preferences', {
+      preferences: {
+        user_id: user.userId,
+        email_enabled: false,
+        email_frequency: 'daily',
+        email_address: null,
+        notify_critical_only: false,
+      } as Partial<NotificationPreferences>,
+      isEmailConfigured: isEmailConfigured(),
+    });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -113,6 +126,9 @@ export async function PUT(request: NextRequest) {
         );
       }
     }
+
+    const guard = supabaseOnlyGuard('Notification preferences');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

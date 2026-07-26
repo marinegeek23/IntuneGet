@@ -5,6 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
+import { computeUpdateHistoryFromJobs } from '@/lib/updates/compute-updates';
 import { parseAccessToken } from '@/lib/auth-utils';
 import type { AutoUpdateHistoryWithPolicy } from '@/types/update-policies';
 
@@ -51,10 +52,18 @@ export async function GET(request: NextRequest) {
     const offset = parseInt(searchParams.get('offset') || '0', 10);
 
     if (!isSupabaseConfigured()) {
+      // sqlite has no auto_update_history table, but packaging_jobs records
+      // every deployment, so the version transitions can be reconstructed.
+      const all = await computeUpdateHistoryFromJobs(user.userId, {
+        tenantId,
+        wingetId,
+        status,
+      });
+      const page = all.slice(offset, offset + limit);
       return NextResponse.json({
-        history: [],
-        count: 0,
-        hasMore: false,
+        history: page,
+        count: all.length,
+        hasMore: offset + page.length < all.length,
       });
     }
 

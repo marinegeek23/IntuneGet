@@ -60,6 +60,8 @@ interface DeploymentError {
   blockedBeforeDispatch?: boolean;
   packageName?: string;
   packageVersion?: string;
+  // Preflight reason code, used to pick the right remediation advice.
+  code?: string;
 }
 
 interface PackageApiErrorResponse {
@@ -218,6 +220,7 @@ export function UploadCart() {
               blockedBeforeDispatch: true,
               packageName: packageLabel,
               packageVersion: versionLabel,
+              code: errorData.code,
             });
             return;
           }
@@ -476,7 +479,12 @@ export function UploadCart() {
                       )}
                       {!error.retryable && (
                         <p className="text-text-muted mt-1">
-                          Keep this app in the cart and try again after its trusted WinGet manifest is updated, or remove it to deploy the remaining apps.
+                          {/* MANIFEST_CHANGED / VERSION_WITHDRAWN mean the saved cart
+                              entry is stale: re-adding fixes it, waiting never does.
+                              Only a genuine publisher hash change needs a later retry. */}
+                          {error.code === 'MANIFEST_CHANGED' || error.code === 'VERSION_WITHDRAWN'
+                            ? 'Remove this app from the cart and add it again to pick up its current version, or remove it to deploy the remaining apps.'
+                            : 'Keep this app in the cart and try again after its trusted WinGet manifest is updated, or remove it to deploy the remaining apps.'}
                         </p>
                       )}
                     </div>

@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getCatalogSource } from '@/lib/catalog';
 import { getAuthFromRequest } from '@/lib/auth/parse-token';
@@ -227,6 +228,9 @@ export async function POST(request: NextRequest) {
       dryRun: action === 'preview',
     };
 
+    const guard = supabaseOnlyGuard('SCCM migration');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Verify migration ownership
@@ -429,6 +433,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('SCCM migration');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

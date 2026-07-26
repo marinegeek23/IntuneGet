@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getCatalogSource } from '@/lib/catalog';
 import { parseAccessToken } from '@/lib/auth-utils';
@@ -28,6 +29,9 @@ export async function GET(request: NextRequest) {
 
     const searchParams = request.nextUrl.searchParams;
     const tenantId = searchParams.get('tenant_id');
+
+    const guard = supabaseOnlyGuard('Update policies', { policies: [], count: 0 });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -96,6 +100,9 @@ export async function POST(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Update policies');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

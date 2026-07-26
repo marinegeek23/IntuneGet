@@ -4,8 +4,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
-import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
+import { resolveTenantForRequest } from '@/lib/msp/tenant-resolution';
 import { parseAccessToken } from '@/lib/auth-utils';
 import type { ManualAppMapping, CreateMappingRequest } from '@/types/unmanaged';
 import type { Database } from '@/types/database';
@@ -26,11 +27,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -41,6 +40,11 @@ export async function GET(request: NextRequest) {
     }
 
     const tenantId = tenantResolution.tenantId;
+
+    const guard = supabaseOnlyGuard('Manual app mappings', { mappings: [] });
+    if (guard) return guard;
+
+    const supabase = createServerClient();
 
     // Get mappings for this tenant and global mappings
     const { data: mappings, error } = await supabase
@@ -99,11 +103,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('Manual app mappings');
+    if (guard) return guard;
+
     const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -216,11 +222,13 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('Manual app mappings');
+    if (guard) return guard;
+
     const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,

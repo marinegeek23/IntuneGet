@@ -75,11 +75,27 @@ services:
       - intuneget-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      # Use 127.0.0.1, not localhost: the container resolves localhost to ::1
+      # first, but Next.js binds IPv4-only (0.0.0.0:3000), so wget would get
+      # ECONNREFUSED and the container would sit permanently "unhealthy".
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
       start_period: 40s
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: cloudflared
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
+    depends_on:
+      - web
+    # No ports needed - dials OUT to Cloudflare, reaches the app on the
+    # compose network at http://web:3000 (the "web" service above).
+    # The Cloudflare Tunnel Public Hostname URL must be set to "web:3000".
 
 volumes:
   intuneget-data:

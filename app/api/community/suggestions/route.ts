@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import {
@@ -52,6 +53,9 @@ export async function GET(request: NextRequest) {
 
     const { status, sort, page, limit } = queryValidation.data;
     const offset = (page - 1) * limit;
+
+    const guard = supabaseOnlyGuard('Community suggestions', { suggestions: [], userVotes: {}, pagination: { page: 1, limit: 0, total: 0, totalPages: 0 } });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -159,6 +163,9 @@ export async function POST(request: NextRequest) {
     }
 
     const { winget_id, reason } = validation.data;
+
+    const guard = supabaseOnlyGuard('Community suggestions');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

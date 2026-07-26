@@ -82,6 +82,12 @@ interface PackageConfigProps {
   package: NormalizedPackage;
   installers: NormalizedInstaller[];
   versions?: string[];
+  // Version the `installers` above actually came from. The catalog snapshot's
+  // latest_version scalar goes stale (and can even disagree with the catalog's
+  // own version history), so pairing it with live installer data produces a
+  // cart entry whose version and SHA256 belong to different releases - which
+  // dispatch preflight then rejects. Always prefer this.
+  manifestVersion?: string;
   onClose: () => void;
   isDeployed?: boolean;
   deployedConfig?: CartItem | null;
@@ -104,15 +110,18 @@ type ConfigSection =
   | 'branding'
   | 'advanced';
 
-export function PackageConfig({ package: pkg, installers, versions = [], onClose, isDeployed = false, deployedConfig, intuneAppId, storeManifest }: PackageConfigProps) {
+export function PackageConfig({ package: pkg, installers, versions = [], manifestVersion, onClose, isDeployed = false, deployedConfig, intuneAppId, storeManifest }: PackageConfigProps) {
   const isStoreApp = pkg.appSource === 'store';
 
   // Store app install experience state
   const [storeInstallExperience, setStoreInstallExperience] = useState<'user' | 'system'>('user');
 
   // Selection state - pre-fill from deployed config when available
+  // The version that `installers` belongs to; falls back to the catalog value
+  // only when the manifest did not report one.
+  const defaultVersion = manifestVersion || pkg.version;
   const [selectedVersion, setSelectedVersion] = useState(
-    deployedConfig?.version || pkg.version
+    deployedConfig?.version || defaultVersion
   );
   const [selectedArch, setSelectedArch] = useState<WingetArchitecture>(() => {
     const win32Config = deployedConfig && 'architecture' in deployedConfig ? deployedConfig : null;
@@ -263,7 +272,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
   // user selects a different version we must re-fetch so the installer URL/SHA
   // (which flow straight into the cart item) match the chosen version rather than
   // silently deploying the latest binary under an older version label.
-  const isNonDefaultVersion = !isStoreApp && !!selectedVersion && selectedVersion !== pkg.version;
+  const isNonDefaultVersion = !isStoreApp && !!selectedVersion && selectedVersion !== defaultVersion;
   const { data: versionManifest, isFetching: isFetchingVersionInstallers } = usePackageManifest(
     pkg.id,
     selectedVersion,

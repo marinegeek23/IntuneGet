@@ -4,8 +4,9 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
-import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
+import { resolveTenantForRequest } from '@/lib/msp/tenant-resolution';
 import { parseAccessToken } from '@/lib/auth-utils';
 import type { ClaimAppRequest, ClaimedApp } from '@/types/unmanaged';
 import type { Database } from '@/types/database';
@@ -74,11 +75,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -89,6 +88,11 @@ export async function POST(request: NextRequest) {
     }
 
     const tenantId = tenantResolution.tenantId;
+
+    const guard = supabaseOnlyGuard('Unmanaged app claims');
+    if (guard) return guard;
+
+    const supabase = createServerClient();
 
     // Ensure user profile exists (required for foreign key constraint)
     await ensureUserProfile(supabase, user.userId, tenantId, user.userEmail, user.userName);
@@ -183,11 +187,13 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('Unmanaged app claims', { claims: [] });
+    if (guard) return guard;
+
     const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -257,11 +263,13 @@ export async function PATCH(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('Unmanaged app claims');
+    if (guard) return guard;
+
     const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,

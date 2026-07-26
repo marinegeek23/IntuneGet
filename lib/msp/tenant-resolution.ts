@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
+import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
 import { canAccessPrimaryTenant, type AccessMode } from '@/lib/msp-permissions';
 
 interface ResolveTargetTenantInput {
@@ -99,4 +99,61 @@ export async function resolveTargetTenantId({
   }
 
   return { tenantId: targetTenantId, errorResponse: null };
+}
+
+/**
+ * Request-level tenant resolution that is safe in both database modes.
+ *
+ * Self-hosted sqlite deployments have no Supabase, which backs MSP membership
+ * and managed-tenant records. createServerClient() throws outright when it is
+ * not configured, so routes must not construct a client just to resolve a
+ * tenant. In sqlite mode there is exactly one tenant - the signed-in user's -
+ * so the token tenant is authoritative and no lookup is required.
+ *
+ * Prefer this over calling resolveTargetTenantId() with an eagerly-created
+ * client; it keeps every route working in both modes without each one
+ * repeating the mode check.
+ */
+export async function resolveTenantForRequest({
+  userId,
+  tokenTenantId,
+  requestedTenantId,
+}: Omit<ResolveTargetTenantInput, 'supabase'>): Promise<ResolveTargetTenantResult> {
+  if (!isSupabaseConfigured()) {
+    return { tenantId: tokenTenantId, errorResponse: null };
+  }
+
+  return resolveTargetTenantId({
+    supabase: createServerClient(),
+    userId,
+    tokenTenantId,
+    requestedTenantId,
+  });
+}
+
+/**
+ * Check whether a tenant has an active admin-consent record.
+ *
+ * The tenant_consent table only exists in Supabase deployments. In sqlite mode
+ * there is no consent cache to consult, and consent is instead proven by the
+ * service-principal token acquisition that every caller performs immediately
+ * after this check - Entra will not issue an app-only token with the required
+ * roles unless admin consent was actually granted. Returning true here defers
+ * to that stronger, live check rather than blocking on a table that cannot
+ * exist.
+ */
+export async function hasActiveTenantConsent(tenantId: string): Promise<boolean> {
+  if (!isSupabaseConfigured()) {
+    return true;
+  }
+
+  const supabase = createServerClient();
+  const { data, error } = await supabase
+    .from('tenant_consent')
+    .select('tenant_id')
+    .eq('tenant_id', tenantId)
+    .eq('is_active', true)
+    .single();
+
+  return Boolean(!error && data);
 }

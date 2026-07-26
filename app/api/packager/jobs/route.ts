@@ -5,7 +5,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase, verifyPackagerApiKey } from '@/lib/db';
-import { createServerClient } from '@/lib/supabase';
+import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
 import { getFeatureFlags } from '@/lib/features';
 
 // Verify the packager auth key (API key for SQLite, service role key for Supabase)
@@ -222,7 +222,10 @@ export async function PATCH(request: NextRequest) {
 
       // Clean up stale update_check_results so the Updates page no longer
       // shows "update available" for the app that was just deployed.
-      if (job.tenant_id && job.winget_id) {
+      // update_check_results only exists in Supabase; in sqlite mode there is
+      // no cache to invalidate, so skip rather than throw into the catch below
+      // on every single deployment.
+      if (isSupabaseConfigured() && job.tenant_id && job.winget_id) {
         try {
           const supabase = createServerClient();
           await supabase
