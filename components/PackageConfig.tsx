@@ -123,6 +123,14 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
   const [selectedVersion, setSelectedVersion] = useState(
     deployedConfig?.version || defaultVersion
   );
+  // Whether the user picked a version from the selector. Until they do, the
+  // selection must follow the resolved manifest rather than stay pinned to
+  // whatever was known at first render: React Query serves cached data while
+  // revalidating, so the initial manifestVersion can be a previously-cached
+  // (older) release. Leaving the version frozen there while `installers`
+  // refreshes to the current release is what produced cart entries whose
+  // version and SHA256 came from different versions.
+  const [versionExplicitlyChosen, setVersionExplicitlyChosen] = useState(false);
   const [selectedArch, setSelectedArch] = useState<WingetArchitecture>(() => {
     const win32Config = deployedConfig && 'architecture' in deployedConfig ? deployedConfig : null;
     const preferred = win32Config?.architecture || 'x64';
@@ -150,6 +158,14 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
   // Cached for 5 minutes via React Query staleTime.
   const { data: variantData, isSuccess: variantsLoaded } = useLocaleVariants(pkg.id);
   const localeVariants = variantsLoaded ? (variantData?.variants ?? []) : (pkg.localeVariants ?? []);
+
+  // Keep the version aligned with the manifest the installers came from,
+  // unless the user chose a version or we are editing an existing deployment.
+  useEffect(() => {
+    if (versionExplicitlyChosen || deployedConfig) return;
+    if (!defaultVersion || selectedVersion === defaultVersion) return;
+    setSelectedVersion(defaultVersion);
+  }, [defaultVersion, selectedVersion, versionExplicitlyChosen, deployedConfig]);
 
   // Clear stale selectedLocale if it doesn't exist in the resolved variants
   useEffect(() => {
@@ -279,10 +295,15 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
     undefined,
     !isNonDefaultVersion
   );
-  const effectiveInstallers =
-    isNonDefaultVersion && versionManifest?.installers?.length
-      ? versionManifest.installers
-      : installers;
+  // Invariant: the installers on screen must always belong to selectedVersion.
+  // When a non-default version is selected, use only that version's manifest -
+  // never fall back to the default version's installers, which would let the
+  // user add a cart item whose SHA256 belongs to a different release than its
+  // version. An empty list leaves selectedInstaller undefined, which disables
+  // the add button until the correct manifest arrives.
+  const effectiveInstallers = isNonDefaultVersion
+    ? (versionManifest?.installers ?? [])
+    : installers;
 
   // Get selected installer (not relevant for store apps)
   const selectedInstaller = effectiveInstallers.find((i) => i.architecture === selectedArch) || effectiveInstallers[0];
@@ -702,6 +723,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
                           type="button"
                           key={version}
                           onClick={() => {
+                            setVersionExplicitlyChosen(true);
                             setSelectedVersion(version);
                             setShowVersions(false);
                           }}
