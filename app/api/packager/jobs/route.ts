@@ -6,6 +6,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase, verifyPackagerApiKey } from '@/lib/db';
 import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
+import { pruneOldVersions, getRetentionKeep } from '@/lib/intune/version-retention';
 import { getFeatureFlags } from '@/lib/features';
 
 // Verify the packager auth key (API key for SQLite, service role key for Supabase)
@@ -218,6 +219,34 @@ export async function PATCH(request: NextRequest) {
           `[Packager Jobs API] Failed to write upload_history for job ${job.id}:`,
           historyError
         );
+      }
+
+      // Prune older versions of this app now that the new one is confirmed
+      // deployed. Never runs for a failed job, so a failure leaves previous
+      // versions untouched. Defaults to a dry run - deletion must be opted
+      // into via INTUNEGET_RETENTION_DRY_RUN=false.
+      if (job.tenant_id && job.winget_id && job.display_name && getRetentionKeep() >= 1) {
+        try {
+          const retention = await pruneOldVersions({
+            tenantId: job.tenant_id,
+            wingetId: job.winget_id,
+            displayName: job.display_name,
+          });
+          console.log(
+            `[Retention] ${retention.dryRun ? 'DRY RUN' : 'DELETE'} ${job.winget_id}: ` +
+              `keep=${retention.keep} kept=${retention.kept.length} ` +
+              `${retention.dryRun ? 'would delete' : 'deleted'}=${retention.deleted.length} ` +
+              `skipped=${retention.skipped.length}` +
+              (retention.errors.length ? ` errors=${retention.errors.join('; ')}` : ''),
+            JSON.stringify({
+              deleted: retention.deleted.map((a) => `${a.displayName} ${a.version}`),
+              skipped: retention.skipped.map((s) => `${s.app.displayName} ${s.app.version}: ${s.reason}`),
+            })
+          );
+        } catch (retentionError) {
+          // Retention is housekeeping; never fail a successful deployment over it.
+          console.error(`[Retention] Failed for job ${job.id}:`, retentionError);
+        }
       }
 
       // Clean up stale update_check_results so the Updates page no longer

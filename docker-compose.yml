@@ -22,6 +22,9 @@ services:
       # API key for packager authentication when using SQLite mode
       # Generate with: openssl rand -hex 32
       - PACKAGER_API_KEY=${PACKAGER_API_KEY:-}
+      # Version retention (see lib/intune/version-retention.ts). Dry run by default.
+      - INTUNEGET_RETENTION_KEEP=${INTUNEGET_RETENTION_KEEP:-2}
+      - INTUNEGET_RETENTION_DRY_RUN=${INTUNEGET_RETENTION_DRY_RUN:-true}
 
       # ===========================================
       # Supabase Configuration (optional in SQLite mode)
