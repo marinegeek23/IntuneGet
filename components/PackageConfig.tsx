@@ -305,6 +305,17 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
     ? (versionManifest?.installers ?? [])
     : installers;
 
+  // The version that effectiveInstallers actually came from. The cart item must
+  // be built from this, not from selectedVersion: selectedVersion is separate
+  // state that can lag the manifest (React Query serves cached data while
+  // revalidating), and pairing it with freshly-fetched installers yields an
+  // entry whose version and SHA256 belong to different releases. Reading the
+  // version off the same response as the installers makes them consistent by
+  // construction rather than by timing.
+  const installerSourceVersion = isNonDefaultVersion
+    ? (versionManifest?.manifest?.version || selectedVersion)
+    : (manifestVersion || pkg.version);
+
   // Get selected installer (not relevant for store apps)
   const selectedInstaller = effectiveInstallers.find((i) => i.architecture === selectedArch) || effectiveInstallers[0];
   const availableArchitectures = [...new Set(effectiveInstallers.map((i) => i.architecture))];
@@ -393,7 +404,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
         selectedInstaller,
         pkg.name,
         effectiveWingetId,
-        selectedVersion,
+        installerSourceVersion,
         config.registryMarkerPath
       );
       setConfig((prev) => ({
@@ -401,7 +412,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
         detectionRules: rules,
       }));
     }
-  }, [selectedInstaller, pkg.name, effectiveWingetId, selectedVersion, config.registryMarkerPath]);
+  }, [selectedInstaller, pkg.name, effectiveWingetId, installerSourceVersion, config.registryMarkerPath]);
 
   const handleAddToCart = async () => {
     if (addedToCartSuccess) return;
@@ -422,7 +433,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
           pkg.packageIdentifier || pkg.id,
           pkg.name,
           storeManifest?.publisher || pkg.publisher,
-          selectedVersion,
+          installerSourceVersion,
           storeInstallExperience,
           {
             description: storeManifest?.description || pkg.description,
@@ -454,7 +465,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], manifes
           displayName,
           publisher: pkg.publisher,
           description: description.trim() || pkg.description,
-          version: selectedVersion,
+          version: installerSourceVersion,
           architecture: selectedInstaller!.architecture,
           installScope: selectedScope,
           installerType: selectedInstaller!.type,
