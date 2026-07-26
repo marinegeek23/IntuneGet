@@ -76,7 +76,13 @@ export function useQuickAdd(
         const installer = data.recommendedInstaller;
 
         if (installer) {
-          const detectionRules = generateDetectionRules(installer, pkg.name, pkg.id, pkg.version);
+          // The manifest is requested without a version, so it resolves the
+          // current release and `installer` belongs to that - not to
+          // pkg.version, which comes from the catalog snapshot and lags
+          // upstream. Pairing them produced a cart entry whose version and
+          // SHA256 were from different releases, rejected by dispatch preflight.
+          const resolvedVersion: string = data.manifest?.version || pkg.version;
+          const detectionRules = generateDetectionRules(installer, pkg.name, pkg.id, resolvedVersion);
           const processesToClose = getDefaultProcessesToClose(pkg.name, installer.type);
 
           addItem({
@@ -85,7 +91,7 @@ export function useQuickAdd(
             displayName: pkg.name,
             publisher: pkg.publisher,
             description: pkg.description,
-            version: pkg.version,
+            version: resolvedVersion,
             architecture: installer.architecture,
             installScope: installer.scope || 'machine',
             installerType: installer.type,
@@ -105,7 +111,7 @@ export function useQuickAdd(
           });
 
           toast.success(`${pkg.name} added`, {
-            description: `v${pkg.version} -- ${installer.architecture}`,
+            description: `v${resolvedVersion} -- ${installer.architecture}`,
             action: {
               label: 'Undo',
               onClick: () => {
