@@ -837,16 +837,21 @@ ${placeLine}
     const nestedPathEscaped = nested.path.replace(/'/g, "''");
     const nestedType = (nested.type ?? '').toLowerCase();
 
+    // The job's install command describes extracting the archive, not running
+    // what is inside it, so it carries no usable switches. Fall back to the
+    // silent switches for the nested installer's own type.
+    const effectiveSwitches = silentSwitches || this.getDefaultSilentSwitches(nestedType);
+
     let executeLine: string;
     if (nestedType === 'msi' || nestedType === 'wix') {
-      const msiProperties = this.extractMsiProperties(silentSwitches);
+      const msiProperties = this.extractMsiProperties(effectiveSwitches);
       executeLine = msiProperties
         ? `Start-ADTMsiProcess -Action 'Install' -FilePath $nestedInstallerPath -AdditionalArgumentList '${msiProperties}'`
         : `Start-ADTMsiProcess -Action 'Install' -FilePath $nestedInstallerPath`;
     } else if (nestedType === 'portable') {
       executeLine = 'throw "Portable nested installers are not supported yet"';
     } else {
-      executeLine = `Start-ADTProcess -FilePath $nestedInstallerPath -ArgumentList '${silentSwitches}' -WindowStyle Hidden -WaitForMsiExec`;
+      executeLine = `Start-ADTProcess -FilePath $nestedInstallerPath -ArgumentList '${effectiveSwitches}' -WindowStyle Hidden -WaitForMsiExec`;
     }
 
     return `$zipExtractDir = [System.IO.Path]::Combine($env:TEMP, "IntuneGet_Zip_" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -1115,24 +1120,14 @@ ${placeLine}
    * - keep both in sync.
    */
   private extractSilentSwitches(installCommand: string, installerType: string): string {
-    const defaultSwitches: Record<string, string> = {
-      msi: '/qn /norestart',
-      exe: '/S',
-      inno: '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
-      nullsoft: '/S',
-      wix: '/qn /norestart',
-      burn: '/q /norestart',
-      msix: '',
-      appx: '',
-      portable: '',
-    };
-
     const type = (installerType ?? '').toLowerCase();
 
     // These types are never launched as a process so they take no switches.
     // Their install commands are PowerShell cmdlets (Add-AppxPackage,
-    // Expand-Archive), not an installer invocation.
-    if (type === 'msix' || type === 'appx' || type === 'portable') {
+    // Expand-Archive), not an installer invocation. A zip's own command is
+    // Expand-Archive too - the switches that matter belong to the nested
+    // installer, which getZipInstallCommand supplies from its declared type.
+    if (type === 'msix' || type === 'appx' || type === 'portable' || type === 'zip') {
       return '';
     }
 
@@ -1160,7 +1155,27 @@ ${placeLine}
       return switchMatch[1];
     }
 
-    return defaultSwitches[type] ?? '/S';
+    return this.getDefaultSilentSwitches(type);
+  }
+
+  /**
+   * Silent switches for an installer type when the install command yields
+   * none. Types that are never launched as a process take no switches.
+   */
+  private getDefaultSilentSwitches(installerType: string): string {
+    const defaults: Record<string, string> = {
+      msi: '/qn /norestart',
+      exe: '/S',
+      inno: '/VERYSILENT /SUPPRESSMSGBOXES /NORESTART',
+      nullsoft: '/S',
+      wix: '/qn /norestart',
+      burn: '/q /norestart',
+      msix: '',
+      appx: '',
+      portable: '',
+      zip: '',
+    };
+    return defaults[(installerType ?? '').toLowerCase()] ?? '/S';
   }
 
   /**
