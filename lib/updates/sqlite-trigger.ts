@@ -23,6 +23,7 @@ import type { Json } from '@/types/database';
 import type { NormalizedInstaller } from '@/types/winget';
 import { isStoreCartItem } from '@/types/upload';
 import type { CartItem, Win32CartItem } from '@/types/upload';
+import { resolveDetectionRules } from '@/lib/detection-rules';
 
 export interface SqliteUpdateRequest {
   winget_id: string;
@@ -171,11 +172,19 @@ async function triggerOne(
   // Detection rules embed the version (the PSADT registry marker compares
   // against it), so carrying the old rules forward would leave Intune checking
   // for the previous version. Regenerate them for the new version.
+  // The manifest often declares no scope, so installer.scope alone would fall
+  // back to machine and emit an HKLM marker rule for an app being deployed at
+  // user scope - which Intune then never detects. Resolve the scope the job
+  // will actually carry first, and generate against that.
+  const effectiveScope =
+    (installer.scope as Win32CartItem['installScope']) || previousConfig.installScope;
+
   const detectionRules = generateDetectionRules(
-    installer,
+    { ...installer, scope: effectiveScope },
     previousConfig.displayName || req.winget_id,
     req.winget_id,
-    latestVersion
+    latestVersion,
+    previousConfig.psadtConfig?.registryMarkerPath
   );
 
   // An update is intentionally a second app with the same name and winget id,
@@ -200,7 +209,7 @@ async function triggerOne(
     installerType: installer.type || previousConfig.installerType,
     installerUrl: installer.url,
     installerSha256: installer.sha256,
-    installScope: (installer.scope as Win32CartItem['installScope']) || previousConfig.installScope,
+    installScope: effectiveScope,
     installCommand: generateInstallCommand(installer, previousConfig.installScope || 'machine'),
     detectionRules,
     psadtConfig: previousConfig.psadtConfig
@@ -229,6 +238,14 @@ async function triggerOne(
     throw error;
   }
 
+  // A redeploy carries the saved deployment config's rules, which were
+  // generated under whatever scope the app had then - re-derive them for the
+  // scope this job is actually created with.
+  const resolvedDetectionRules = resolveDetectionRules({
+    ...item,
+    registryMarkerPath: item.psadtConfig?.registryMarkerPath,
+  });
+
   const jobId = crypto.randomUUID();
   const created = await db.jobs.create({
     id: jobId,
@@ -246,7 +263,7 @@ async function triggerOne(
     install_command: item.installCommand,
     uninstall_command: item.uninstallCommand,
     install_scope: item.installScope,
-    detection_rules: item.detectionRules as unknown as Json,
+    detection_rules: resolvedDetectionRules as unknown as Json,
     package_config: item as unknown as Json,
     status: 'queued',
     progress_percent: 0,

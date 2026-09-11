@@ -13,7 +13,7 @@ import type {
   RegistryDetectionRule,
   ScriptDetectionRule,
 } from '@/types/intune';
-import type { NormalizedInstaller, WingetInstallerType, WingetScope } from '@/types/winget';
+import type { NormalizedInstaller, WingetArchitecture, WingetInstallerType, WingetScope } from '@/types/winget';
 import { resolveInstallerFileName } from '@/lib/installer-filename';
 import { normalizeMarkerPath } from '@/lib/registry-marker';
 
@@ -86,6 +86,77 @@ export function generateDetectionRules(
       }
       return generateFolderDetectionRules(installer, displayName);
   }
+}
+
+/**
+ * Minimal shape needed to re-derive detection rules for a job.
+ */
+export interface DetectionRuleSubject {
+  wingetId: string;
+  version: string;
+  displayName: string;
+  architecture: WingetArchitecture;
+  installerType: WingetInstallerType;
+  installScope?: WingetScope;
+  installerUrl?: string;
+  installerSha256?: string;
+  nestedInstallerType?: WingetInstallerType;
+  nestedInstallerPath?: string;
+  sourceType?: 'winget' | 'custom';
+  registryMarkerPath?: string;
+  detectionRules?: DetectionRule[];
+}
+
+/**
+ * Detection rules are generated once, when an item is first configured, from
+ * the scope known at that moment - and then carried along: in a browser-
+ * persisted cart, or in the saved deployment config of an already-deployed
+ * app. Either can hand back rules generated under a scope the job no longer
+ * has. A user-scope job with a machine-scope marker rule installs fine and is
+ * then reported failed forever, because Intune looks in the hive the install
+ * did not write.
+ *
+ * Re-derive them from the scope the job is actually being created with. Call
+ * this from every path that creates a packaging job.
+ *
+ * Returns the existing rules untouched for:
+ *  - custom apps, whose rules are supplied rather than derived
+ *  - msix/appx, whose detection keys off the package family name and does not
+ *    depend on scope; the subject does not carry that name, so re-deriving
+ *    would discard it
+ *  - subjects lacking a wingetId or version, which cannot resolve to the
+ *    marker rule and would fall back to weaker detection
+ */
+export function resolveDetectionRules(
+  subject: DetectionRuleSubject
+): DetectionRule[] | undefined {
+  const type = (subject.installerType ?? '').toLowerCase();
+  if (
+    subject.sourceType === 'custom' ||
+    subject.wingetId?.startsWith('Custom.') ||
+    type === 'msix' ||
+    type === 'appx' ||
+    !subject.wingetId ||
+    !subject.version
+  ) {
+    return subject.detectionRules;
+  }
+
+  return generateDetectionRules(
+    {
+      architecture: subject.architecture,
+      url: subject.installerUrl ?? '',
+      sha256: subject.installerSha256 ?? '',
+      type: subject.installerType,
+      nestedInstallerType: subject.nestedInstallerType,
+      nestedInstallerPath: subject.nestedInstallerPath,
+      scope: subject.installScope,
+    },
+    subject.displayName,
+    subject.wingetId,
+    subject.version,
+    subject.registryMarkerPath
+  );
 }
 
 /**

@@ -20,7 +20,7 @@ import { verifyTenantConsent } from '@/lib/msp/consent-verification';
 import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
 import { checkStoredConsent } from '@/lib/msp/consent-cache';
 import { extractSilentSwitches } from '@/lib/msp/silent-switches';
-import { generateDetectionRules } from '@/lib/detection-rules';
+import { resolveDetectionRules } from '@/lib/detection-rules';
 
 
 import { buildIntuneAppDescription } from '@/lib/intune-description';
@@ -40,54 +40,7 @@ import {
   InstallerPreflightError,
 } from '@/lib/installer-preflight';
 
-/**
- * Detection rules are generated when an item enters the cart, from the scope
- * the winget manifest declares, and the cart is persisted in the browser - so
- * an item can carry rules generated under a scope it no longer has. A
- * user-scope job with a machine-scope marker rule installs fine and is then
- * reported failed forever, because Intune looks in the hive the install did
- * not write.
- *
- * Regenerate here, at dispatch, from the scope the job is actually created
- * with. This is the only point every path passes through.
- *
- * Left alone:
- *  - custom apps, whose rules are supplied rather than derived
- *  - msix/appx, whose detection keys off the package family name and does not
- *    depend on scope; the cart item does not carry that name, so regenerating
- *    would discard it
- *  - items without a wingetId and version, which cannot resolve to the marker
- *    rule and would fall back to weaker detection
- */
-function resolveDetectionRules(item: Win32CartItem): Win32CartItem['detectionRules'] {
-  const type = (item.installerType ?? '').toLowerCase();
-  if (
-    item.sourceType === 'custom' ||
-    item.wingetId.startsWith('Custom.') ||
-    type === 'msix' ||
-    type === 'appx' ||
-    !item.wingetId ||
-    !item.version
-  ) {
-    return item.detectionRules;
-  }
 
-  return generateDetectionRules(
-    {
-      architecture: item.architecture,
-      url: item.installerUrl,
-      sha256: item.installerSha256,
-      type: item.installerType,
-      nestedInstallerType: item.nestedInstallerType,
-      nestedInstallerPath: item.nestedInstallerPath,
-      scope: item.installScope,
-    },
-    item.displayName,
-    item.wingetId,
-    item.version,
-    item.psadtConfig?.registryMarkerPath,
-  );
-}
 
 export const maxDuration = 300;
 
@@ -459,7 +412,10 @@ export async function POST(request: NextRequest) {
           try {
             const jobId = crypto.randomUUID();
             const installerSha256 = item.installerSha256?.trim() || '';
-            const detectionRules = resolveDetectionRules(item);
+            const detectionRules = resolveDetectionRules({
+              ...item,
+              registryMarkerPath: item.psadtConfig?.registryMarkerPath,
+            });
 
             const jobRecord = await db.jobs.create({
               id: jobId,
@@ -527,7 +483,10 @@ export async function POST(request: NextRequest) {
             const installerSha256 = item.installerSha256?.trim() || '';
             // Same resolution the job row was created with - deterministic for
             // a given item, so the dispatched inputs and the row agree.
-            const detectionRules = resolveDetectionRules(item);
+            const detectionRules = resolveDetectionRules({
+              ...item,
+              registryMarkerPath: item.psadtConfig?.registryMarkerPath,
+            });
             const workflowInputs: WorkflowInputs = {
               jobId,
               tenantId,
