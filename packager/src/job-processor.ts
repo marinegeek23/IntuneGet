@@ -774,11 +774,34 @@ ${steps}
     return `$msixPath = "$($adtSession.DirFiles)\\${fileName}"
     Write-ADTLogEntry -Message "Provisioning MSIX/APPX package for all users: $msixPath" -Severity 'Info' -Source 'Install-ADTDeployment'
     try {
-        Add-AppxProvisionedPackage -Online -PackagePath $msixPath -SkipLicense -ErrorAction Stop
-        Write-ADTLogEntry -Message "MSIX/APPX package provisioned; it registers for each user at their next sign-in" -Severity 'Success' -Source 'Install-ADTDeployment'
+        $provisioned = Add-AppxProvisionedPackage -Online -PackagePath $msixPath -SkipLicense -ErrorAction Stop
+        Write-ADTLogEntry -Message "MSIX/APPX package provisioned" -Severity 'Success' -Source 'Install-ADTDeployment'
     } catch {
         Write-ADTLogEntry -Message "Failed to provision MSIX/APPX package: $_" -Severity 'Error' -Source 'Install-ADTDeployment'
         throw
+    }
+
+    # Provisioning only registers the package into profiles created after this
+    # point - an existing profile never picks it up, not even on next sign-in.
+    # Register it for whoever is signed in now so the app is actually usable.
+    # This runs in their session with their elevated token, because a package
+    # declaring a service or firewall rules cannot be registered unelevated.
+    $activeUser = (Get-ADTEnvironment).RunAsActiveUser
+    if (!$activeUser) {
+        Write-ADTLogEntry -Message "No user is signed in; the package is provisioned and will register for profiles created from now on" -Severity 'Info' -Source 'Install-ADTDeployment'
+    } else {
+        $staged = Get-AppxPackage -AllUsers | Where-Object { $_.PackageFullName -eq $provisioned.PackageName } | Select-Object -First 1
+        if (!$staged) {
+            Write-ADTLogEntry -Message "Provisioned package not found in the staged package list; skipping per-user registration" -Severity 'Warning' -Source 'Install-ADTDeployment'
+        } else {
+            Write-ADTLogEntry -Message "Registering $($staged.PackageFamilyName) for $($activeUser.NTAccount)" -Severity 'Info' -Source 'Install-ADTDeployment'
+            try {
+                Start-ADTProcessAsUser -FilePath "$env:SystemRoot\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -ArgumentList "-NoProfile -NonInteractive -Command Add-AppxPackage -RegisterByFamilyName -MainPackage $($staged.PackageFamilyName)" -UseLinkedAdminToken -CreateNoWindow -SuccessExitCodes @(0)
+                Write-ADTLogEntry -Message "Registered for the signed-in user" -Severity 'Success' -Source 'Install-ADTDeployment'
+            } catch {
+                Write-ADTLogEntry -Message "Could not register for $($activeUser.NTAccount): $_. The package is provisioned, but this user will not see it until their profile is recreated. A package declaring a service or firewall rules needs an administrator to register it, so this is expected for a standard user." -Severity 'Warning' -Source 'Install-ADTDeployment'
+            }
+        }
     }`;
   }
 
