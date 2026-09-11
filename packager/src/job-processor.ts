@@ -778,18 +778,20 @@ ${steps}
         ? '        Expand-Archive -Path $portableSource -DestinationPath $installPath -Force'
         : '        Copy-Item -Path $portableSource -Destination $installPath -Force';
 
+    const { root, pathTarget } = this.getPortableLocation(job);
+
     return `$portableSource = "$($adtSession.DirFiles)\\${fileName}"
-    $installPath = Join-Path $env:ProgramFiles '${folderName}'
+    $installPath = Join-Path ${root} '${folderName}'
     Write-ADTLogEntry -Message "Installing portable app to: $installPath" -Severity 'Info' -Source 'Install-ADTDeployment'
     try {
         if (-not (Test-Path $installPath)) {
             $null = New-Item -Path $installPath -ItemType Directory -Force
         }
 ${placeLine}
-        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-        if (($machinePath -split ';') -notcontains $installPath) {
-            [System.Environment]::SetEnvironmentVariable('Path', ($machinePath.TrimEnd(';') + ';' + $installPath), 'Machine')
-            Write-ADTLogEntry -Message "Added to machine PATH: $installPath" -Severity 'Info' -Source 'Install-ADTDeployment'
+        $currentPath = [System.Environment]::GetEnvironmentVariable('Path', '${pathTarget}')
+        if (($currentPath -split ';') -notcontains $installPath) {
+            [System.Environment]::SetEnvironmentVariable('Path', ($currentPath.TrimEnd(';') + ';' + $installPath), '${pathTarget}')
+            Write-ADTLogEntry -Message "Added to ${pathTarget} PATH: $installPath" -Severity 'Info' -Source 'Install-ADTDeployment'
         }
         Write-ADTLogEntry -Message "Portable app installed successfully" -Severity 'Success' -Source 'Install-ADTDeployment'
     } catch {
@@ -799,8 +801,21 @@ ${placeLine}
   }
 
   /**
-   * Program Files folder name for a portable app, stripped of characters
-   * that are not valid in a path and single-quote escaped for PowerShell
+   * Where a portable app is placed, and which PATH it joins.
+   *
+   * A user-scope deployment goes under LOCALAPPDATA, which the signed-in
+   * user can write - so a self-updating CLI can replace its own binary in
+   * place. A machine-scope one goes to Program Files, which it cannot.
+   */
+  private getPortableLocation(job: PackagingJob): { root: string; pathTarget: string } {
+    return (job.install_scope ?? '').toLowerCase() === 'user'
+      ? { root: '$env:LOCALAPPDATA', pathTarget: 'User' }
+      : { root: '$env:ProgramFiles', pathTarget: 'Machine' };
+  }
+
+  /**
+   * Install folder name for a portable app, stripped of characters that are
+   * not valid in a path and single-quote escaped for PowerShell
    */
   private getPortableFolderName(job: PackagingJob): string {
     const cleaned = job.display_name.replace(/[\\/:*?"<>|]/g, '').trim();
@@ -922,13 +937,15 @@ ${placeLine}
    */
   private getPortableUninstallCommand(job: PackagingJob): string {
     const folderName = this.getPortableFolderName(job);
-    return `$installPath = Join-Path $env:ProgramFiles '${folderName}'
+    const { root, pathTarget } = this.getPortableLocation(job);
+
+    return `$installPath = Join-Path ${root} '${folderName}'
     Write-ADTLogEntry -Message "Removing portable app folder: $installPath" -Severity 'Info' -Source 'Uninstall-ADTDeployment'
     try {
-        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
-        if (($machinePath -split ';') -contains $installPath) {
-            $trimmed = ($machinePath -split ';' | Where-Object { $_ -and $_ -ne $installPath }) -join ';'
-            [System.Environment]::SetEnvironmentVariable('Path', $trimmed, 'Machine')
+        $currentPath = [System.Environment]::GetEnvironmentVariable('Path', '${pathTarget}')
+        if (($currentPath -split ';') -contains $installPath) {
+            $trimmed = ($currentPath -split ';' | Where-Object { $_ -and $_ -ne $installPath }) -join ';'
+            [System.Environment]::SetEnvironmentVariable('Path', $trimmed, '${pathTarget}')
         }
         if (Test-Path $installPath) {
             Remove-Item -Path $installPath -Recurse -Force -ErrorAction Stop
