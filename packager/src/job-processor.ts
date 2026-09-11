@@ -710,7 +710,7 @@ ${steps}
       installerType === 'msix' ||
       installerType === 'appx'
     ) {
-      return this.getMsixInstallCommand(fileName);
+      return this.getMsixInstallCommand(job, fileName);
     }
 
     // Portable apps have no installer to run - the payload is placed on disk.
@@ -753,12 +753,29 @@ ${steps}
    * Get install command for MSIX/APPX packages (PSADT v4 cmdlets)
    * Provisions the package online so it applies to all users
    */
-  private getMsixInstallCommand(fileName: string): string {
+  private getMsixInstallCommand(job: PackagingJob, fileName: string): string {
+    // Registering for the signed-in user takes effect immediately.
+    // Provisioning stages the package into the image instead, and Windows
+    // registers it into each profile at that user's next logon - so a
+    // machine-scope install is not usable by anyone already signed in until
+    // they sign out and back in.
+    if ((job.install_scope ?? '').toLowerCase() === 'user') {
+      return `$msixPath = "$($adtSession.DirFiles)\\${fileName}"
+    Write-ADTLogEntry -Message "Installing MSIX/APPX package for the current user: $msixPath" -Severity 'Info' -Source 'Install-ADTDeployment'
+    try {
+        Add-AppxPackage -Path $msixPath -ErrorAction Stop
+        Write-ADTLogEntry -Message "MSIX/APPX package installed successfully" -Severity 'Success' -Source 'Install-ADTDeployment'
+    } catch {
+        Write-ADTLogEntry -Message "Failed to install MSIX/APPX package: $_" -Severity 'Error' -Source 'Install-ADTDeployment'
+        throw
+    }`;
+    }
+
     return `$msixPath = "$($adtSession.DirFiles)\\${fileName}"
     Write-ADTLogEntry -Message "Provisioning MSIX/APPX package for all users: $msixPath" -Severity 'Info' -Source 'Install-ADTDeployment'
     try {
         Add-AppxProvisionedPackage -Online -PackagePath $msixPath -SkipLicense -ErrorAction Stop
-        Write-ADTLogEntry -Message "MSIX/APPX package provisioned successfully" -Severity 'Success' -Source 'Install-ADTDeployment'
+        Write-ADTLogEntry -Message "MSIX/APPX package provisioned; it registers for each user at their next sign-in" -Severity 'Success' -Source 'Install-ADTDeployment'
     } catch {
         Write-ADTLogEntry -Message "Failed to provision MSIX/APPX package: $_" -Severity 'Error' -Source 'Install-ADTDeployment'
         throw
@@ -888,6 +905,7 @@ ${placeLine}
     }
 
     const installerType = (job.installer_type ?? '').toLowerCase();
+    const installScope = (job.install_scope ?? '').toLowerCase();
 
     // MSIX/APPX uninstall sentinel emitted by the web app in place of a
     // command. Honored only when the package really was installed as MSIX:
@@ -897,7 +915,7 @@ ${placeLine}
     // through reaches the registry lookup, which matches how it installed.
     const msixUninstall = job.uninstall_command.match(/^MSIX_UNINSTALL:(.+)$/);
     if (msixUninstall && (installerType === 'msix' || installerType === 'appx')) {
-      return this.getMsixUninstallCommand(msixUninstall[1]);
+      return this.getMsixUninstallCommand(msixUninstall[1], installScope === 'user');
     }
 
     // Portable apps are just a folder on disk - there is no uninstaller to run.
@@ -938,19 +956,30 @@ ${placeLine}
    * Uninstall an MSIX/APPX package: remove the provisioned copy so it stops
    * being applied to new users, then remove any per-user installed instances
    */
-  private getMsixUninstallCommand(packageName: string): string {
+  private getMsixUninstallCommand(packageName: string, userScope = false): string {
     const escaped = packageName.replace(/'/g, "''");
-    return `$packageName = '${escaped}'
-    Write-ADTLogEntry -Message "Removing MSIX package: $packageName" -Severity 'Info' -Source 'Uninstall-ADTDeployment'
-    try {
-        $provPackage = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$packageName*" }
+
+    // A user-scope install never touched the provisioned list, and both
+    // Remove-AppxProvisionedPackage and -AllUsers require elevation the
+    // signed-in user does not have - so remove only their own copy.
+    const removal = userScope
+      ? `        $packages = Get-AppxPackage -Name "*$packageName*" -ErrorAction SilentlyContinue
+        foreach ($pkg in $packages) {
+            Remove-AppxPackage -Package $pkg.PackageFullName -ErrorAction SilentlyContinue
+        }`
+      : `        $provPackage = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$packageName*" }
         if ($provPackage) {
             $provPackage | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
         }
         $packages = Get-AppxPackage -Name "*$packageName*" -AllUsers -ErrorAction SilentlyContinue
         foreach ($pkg in $packages) {
             Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
-        }
+        }`;
+
+    return `$packageName = '${escaped}'
+    Write-ADTLogEntry -Message "Removing MSIX package: $packageName" -Severity 'Info' -Source 'Uninstall-ADTDeployment'
+    try {
+${removal}
         Write-ADTLogEntry -Message "MSIX package removal completed" -Severity 'Success' -Source 'Uninstall-ADTDeployment'
     } catch {
         Write-ADTLogEntry -Message "Failed to remove MSIX package: $_" -Severity 'Error' -Source 'Uninstall-ADTDeployment'
