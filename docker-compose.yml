@@ -89,19 +89,6 @@ services:
       retries: 3
       start_period: 40s
 
-  cloudflared:
-    image: cloudflare/cloudflared:latest
-    container_name: cloudflared
-    restart: unless-stopped
-    command: tunnel --no-autoupdate run
-    environment:
-      - TUNNEL_TOKEN=${TUNNEL_TOKEN}
-    depends_on:
-      - web
-    # No ports needed - dials OUT to Cloudflare, reaches the app on the
-    # compose network at http://web:3000 (the "web" service above).
-    # The Cloudflare Tunnel Public Hostname URL must be set to "web:3000".
-
 volumes:
   intuneget-data:
     driver: local
