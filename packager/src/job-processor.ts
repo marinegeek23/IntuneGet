@@ -895,6 +895,14 @@ ${placeLine}
       return this.getPortableUninstallCommand(job);
     }
 
+    // Registry uninstall sentinel emitted by the web app in place of a command.
+    // Checked after the portable branch above: a portable app carries this
+    // sentinel too, but nothing ever registers an uninstall entry for it.
+    const registryUninstall = job.uninstall_command.match(/^REGISTRY_UNINSTALL:(.+)$/);
+    if (registryUninstall) {
+      return this.getRegistryUninstallCommand(job, registryUninstall[1]);
+    }
+
     // MSI uninstall: use the product code with Start-ADTMsiProcess
     const productCodeMatch = job.uninstall_command.match(
       /\{[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}\}/
@@ -929,6 +937,55 @@ ${placeLine}
         Write-ADTLogEntry -Message "Failed to remove MSIX package: $_" -Severity 'Error' -Source 'Uninstall-ADTDeployment'
         throw
     }`;
+  }
+
+  /**
+   * Uninstall through the application's own registered uninstaller.
+   *
+   * Get-ADTApplication and Uninstall-ADTApplication do the registry lookup,
+   * choose MSI or EXE, and use the registered QuietUninstallString, so there
+   * is no uninstall command to construct here. Falls back to winget when the
+   * display name matches nothing registered - winget.exe is resolved by path
+   * as well as PATH, since PATH does not include it under SYSTEM.
+   */
+  private getRegistryUninstallCommand(job: PackagingJob, displayName: string): string {
+    const appName = this.stripInstallerSuffixes(displayName).replace(/'/g, "''");
+    const wingetId = (job.winget_id ?? '').replace(/'/g, "''");
+
+    return `$appName = '${appName}'
+    $wingetId = '${wingetId}'
+    Write-ADTLogEntry -Message "Searching for installed application: $appName" -Source 'Uninstall-ADTDeployment'
+    $installedApp = Get-ADTApplication -Name $appName
+    if ($installedApp) {
+        Write-ADTLogEntry -Message "Found via registry name, uninstalling" -Source 'Uninstall-ADTDeployment'
+        Uninstall-ADTApplication -Name $appName -SuccessExitCodes @(0, 1605, 1614) -RebootExitCodes @(1641, 3010)
+    } else {
+        Write-ADTLogEntry -Message "Not found by name '$appName', falling back to winget uninstall --id $wingetId" -Severity 'Warning' -Source 'Uninstall-ADTDeployment'
+        $wingetExe = Get-Command winget.exe -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Source
+        if (-not $wingetExe) {
+            $wingetExe = Get-ChildItem "$env:ProgramFiles\\WindowsApps\\Microsoft.DesktopAppInstaller_*_*__8wekyb3d8bbwe\\winget.exe" -ErrorAction SilentlyContinue |
+                Sort-Object LastWriteTime -Descending | Select-Object -First 1 -ExpandProperty FullName
+        }
+        if ($wingetExe) {
+            Start-ADTProcess -FilePath $wingetExe -ArgumentList "uninstall --id $wingetId --silent --accept-source-agreements --disable-interactivity" -WindowStyle Hidden -SuccessExitCodes @(0)
+        } else {
+            throw "Could not find installed application: $appName (winget not available for fallback)"
+        }
+    }`;
+  }
+
+  /**
+   * Strip the packaging suffixes winget carries in a display name but that do
+   * not appear in the registry DisplayName, e.g.
+   * "Foo (Machine-Wide Install)" -> "Foo"
+   */
+  private stripInstallerSuffixes(displayName: string): string {
+    return displayName
+      .replace(
+        /\s*\((?:Install|Machine-Wide Install|Machine Wide Install|User|x64|x86|64-bit|32-bit)\)$/i,
+        ''
+      )
+      .trim();
   }
 
   /**
