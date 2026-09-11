@@ -40,6 +40,7 @@ import { EspProfileSelector } from '@/components/EspProfileSelector';
 import type { CartItem, StoreCartItem, IntuneAppCategorySelection, PackageAssignment } from '@/types/upload';
 import type { EspProfileSelection } from '@/types/esp';
 import { isStoreCartItem, isWin32CartItem } from '@/types/upload';
+import { generateDetectionRules } from '@/lib/detection-rules';
 import type { RequirementRule, AppRelationship } from '@/types/intune';
 import type {
   PSADTConfig,
@@ -199,8 +200,39 @@ export function CartItemConfig({ item, onClose }: CartItemConfigProps) {
           );
         }
 
+        // Detection rules are generated once, when the item enters the cart,
+        // from the manifest's scope. Changing the scope here has to regenerate
+        // them: the registry marker moves between HKLM and HKCU, and folder
+        // detection moves between Program Files and LOCALAPPDATA. Left stale,
+        // the install succeeds and Intune reports it failed forever, because
+        // it looks for the marker in the hive the install did not write.
+        let nextDetectionRules = isWin32CartItem(item) ? item.detectionRules : undefined;
+        if (isWin32CartItem(item) && selectedScope !== item.installScope) {
+          // MSIX/APPX detection keys off the package family name and does not
+          // depend on scope; regenerating it here would drop that name, which
+          // the cart item does not carry.
+          if (item.installerType !== 'msix' && item.installerType !== 'appx') {
+            nextDetectionRules = generateDetectionRules(
+              {
+                architecture: item.architecture,
+                url: item.installerUrl,
+                sha256: item.installerSha256,
+                type: item.installerType,
+                nestedInstallerType: item.nestedInstallerType,
+                nestedInstallerPath: item.nestedInstallerPath,
+                scope: selectedScope,
+              },
+              item.displayName,
+              item.wingetId,
+              item.version,
+              config.registryMarkerPath,
+            );
+          }
+        }
+
         updateItem(item.id, {
           installScope: selectedScope,
+          ...(nextDetectionRules ? { detectionRules: nextDetectionRules } : {}),
           psadtConfig: config,
           assignments: assignments.length > 0 ? assignments : undefined,
           categories: categories.length > 0 ? categories : undefined,
