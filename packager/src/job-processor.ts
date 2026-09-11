@@ -697,8 +697,28 @@ ${steps}
       return `Start-ADTProcess -FilePath "$env:SystemRoot\\System32\\cmd.exe" -ArgumentList '/c ${overrideEscaped}' -WorkingDirectory $adtSession.DirFiles -WindowStyle Hidden`;
     }
 
-    const installerType = job.installer_type;
+    const installerType = (job.installer_type ?? '').toLowerCase();
     const ext = path.extname(fileName).toLowerCase();
+
+    // MSIX/APPX are packages, not executables - CreateProcess on one fails with
+    // BadImageFormatException (0x800700C1). Provision them for all users instead.
+    if (
+      ext === '.msix' ||
+      ext === '.msixbundle' ||
+      ext === '.appx' ||
+      ext === '.appxbundle' ||
+      installerType === 'msix' ||
+      installerType === 'appx'
+    ) {
+      return this.getMsixInstallCommand(fileName);
+    }
+
+    // Portable apps have no installer to run - the payload is placed on disk.
+    // Checked before the zip branch because a portable app may ship as a .zip
+    // without declaring a nested installer.
+    if (installerType === 'portable') {
+      return this.getPortableInstallCommand(job, fileName);
+    }
 
     // Zip archives carry a nested installer - never execute the .zip itself
     // (a zip-declared installer that is actually an .exe or .msi still runs natively)
@@ -727,6 +747,64 @@ ${steps}
       .filter((token) => token && !/^\/(q[nbrfu]?|quiet|norestart|i|x)$/i.test(token))
       .join(' ')
       .trim();
+  }
+
+  /**
+   * Get install command for MSIX/APPX packages (PSADT v4 cmdlets)
+   * Provisions the package online so it applies to all users
+   */
+  private getMsixInstallCommand(fileName: string): string {
+    return `$msixPath = "$($adtSession.DirFiles)\\${fileName}"
+    Write-ADTLogEntry -Message "Provisioning MSIX/APPX package for all users: $msixPath" -Severity 'Info' -Source 'Install-ADTDeployment'
+    try {
+        Add-AppxProvisionedPackage -Online -PackagePath $msixPath -SkipLicense -ErrorAction Stop
+        Write-ADTLogEntry -Message "MSIX/APPX package provisioned successfully" -Severity 'Success' -Source 'Install-ADTDeployment'
+    } catch {
+        Write-ADTLogEntry -Message "Failed to provision MSIX/APPX package: $_" -Severity 'Error' -Source 'Install-ADTDeployment'
+        throw
+    }`;
+  }
+
+  /**
+   * Get install command for portable apps (PSADT v4 cmdlets)
+   * Expands a .zip payload, or copies a bare binary, into Program Files and
+   * puts that directory on the machine PATH so a portable CLI resolves
+   */
+  private getPortableInstallCommand(job: PackagingJob, fileName: string): string {
+    const folderName = this.getPortableFolderName(job);
+    const ext = path.extname(fileName).toLowerCase();
+    const placeLine =
+      ext === '.zip'
+        ? '        Expand-Archive -Path $portableSource -DestinationPath $installPath -Force'
+        : '        Copy-Item -Path $portableSource -Destination $installPath -Force';
+
+    return `$portableSource = "$($adtSession.DirFiles)\\${fileName}"
+    $installPath = Join-Path $env:ProgramFiles '${folderName}'
+    Write-ADTLogEntry -Message "Installing portable app to: $installPath" -Severity 'Info' -Source 'Install-ADTDeployment'
+    try {
+        if (-not (Test-Path $installPath)) {
+            $null = New-Item -Path $installPath -ItemType Directory -Force
+        }
+${placeLine}
+        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        if (($machinePath -split ';') -notcontains $installPath) {
+            [System.Environment]::SetEnvironmentVariable('Path', ($machinePath.TrimEnd(';') + ';' + $installPath), 'Machine')
+            Write-ADTLogEntry -Message "Added to machine PATH: $installPath" -Severity 'Info' -Source 'Install-ADTDeployment'
+        }
+        Write-ADTLogEntry -Message "Portable app installed successfully" -Severity 'Success' -Source 'Install-ADTDeployment'
+    } catch {
+        Write-ADTLogEntry -Message "Failed to install portable app: $_" -Severity 'Error' -Source 'Install-ADTDeployment'
+        throw
+    }`;
+  }
+
+  /**
+   * Program Files folder name for a portable app, stripped of characters
+   * that are not valid in a path and single-quote escaped for PowerShell
+   */
+  private getPortableFolderName(job: PackagingJob): string {
+    const cleaned = job.display_name.replace(/[\\/:*?"<>|]/g, '').trim();
+    return (cleaned || job.winget_id).replace(/'/g, "''");
   }
 
   /**
@@ -789,6 +867,19 @@ ${steps}
       return "Write-ADTLogEntry -Message 'No uninstall command specified' -Severity 'Warning' -Source 'Uninstall-ADTDeployment'";
     }
 
+    // MSIX/APPX uninstall sentinel emitted by the web app in place of a command
+    const msixUninstall = job.uninstall_command.match(/^MSIX_UNINSTALL:(.+)$/);
+    if (msixUninstall) {
+      return this.getMsixUninstallCommand(msixUninstall[1]);
+    }
+
+    // Portable apps are just a folder on disk - there is no uninstaller to run.
+    // Checked by type because these carry a REGISTRY_UNINSTALL sentinel that
+    // can never match (nothing registers an uninstall entry for them).
+    if ((job.installer_type ?? '').toLowerCase() === 'portable') {
+      return this.getPortableUninstallCommand(job);
+    }
+
     // MSI uninstall: use the product code with Start-ADTMsiProcess
     const productCodeMatch = job.uninstall_command.match(
       /\{[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}\}/
@@ -799,6 +890,56 @@ ${steps}
 
     const uninstallCmd = job.uninstall_command.replace(/'/g, "''");
     return `Start-ADTProcess -FilePath "$env:SystemRoot\\System32\\cmd.exe" -ArgumentList '/c ${uninstallCmd}' -WindowStyle Hidden`;
+  }
+
+  /**
+   * Uninstall an MSIX/APPX package: remove the provisioned copy so it stops
+   * being applied to new users, then remove any per-user installed instances
+   */
+  private getMsixUninstallCommand(packageName: string): string {
+    const escaped = packageName.replace(/'/g, "''");
+    return `$packageName = '${escaped}'
+    Write-ADTLogEntry -Message "Removing MSIX package: $packageName" -Severity 'Info' -Source 'Uninstall-ADTDeployment'
+    try {
+        $provPackage = Get-AppxProvisionedPackage -Online | Where-Object { $_.DisplayName -like "*$packageName*" }
+        if ($provPackage) {
+            $provPackage | Remove-AppxProvisionedPackage -Online -ErrorAction SilentlyContinue
+        }
+        $packages = Get-AppxPackage -Name "*$packageName*" -AllUsers -ErrorAction SilentlyContinue
+        foreach ($pkg in $packages) {
+            Remove-AppxPackage -Package $pkg.PackageFullName -AllUsers -ErrorAction SilentlyContinue
+        }
+        Write-ADTLogEntry -Message "MSIX package removal completed" -Severity 'Success' -Source 'Uninstall-ADTDeployment'
+    } catch {
+        Write-ADTLogEntry -Message "Failed to remove MSIX package: $_" -Severity 'Error' -Source 'Uninstall-ADTDeployment'
+        throw
+    }`;
+  }
+
+  /**
+   * Uninstall a portable app: drop it off the machine PATH, then remove the
+   * folder that getPortableInstallCommand created
+   */
+  private getPortableUninstallCommand(job: PackagingJob): string {
+    const folderName = this.getPortableFolderName(job);
+    return `$installPath = Join-Path $env:ProgramFiles '${folderName}'
+    Write-ADTLogEntry -Message "Removing portable app folder: $installPath" -Severity 'Info' -Source 'Uninstall-ADTDeployment'
+    try {
+        $machinePath = [System.Environment]::GetEnvironmentVariable('Path', 'Machine')
+        if (($machinePath -split ';') -contains $installPath) {
+            $trimmed = ($machinePath -split ';' | Where-Object { $_ -and $_ -ne $installPath }) -join ';'
+            [System.Environment]::SetEnvironmentVariable('Path', $trimmed, 'Machine')
+        }
+        if (Test-Path $installPath) {
+            Remove-Item -Path $installPath -Recurse -Force -ErrorAction Stop
+            Write-ADTLogEntry -Message "Portable app folder removed successfully" -Severity 'Success' -Source 'Uninstall-ADTDeployment'
+        } else {
+            Write-ADTLogEntry -Message "Portable app folder not found: $installPath" -Severity 'Warning' -Source 'Uninstall-ADTDeployment'
+        }
+    } catch {
+        Write-ADTLogEntry -Message "Failed to remove portable app folder: $_" -Severity 'Error' -Source 'Uninstall-ADTDeployment'
+        throw
+    }`;
   }
 
   /**
@@ -895,6 +1036,9 @@ ${steps}
 
   /**
    * Extract silent switches from install command
+   *
+   * Mirrors lib/msp/silent-switches.ts (the packager cannot import from lib/)
+   * - keep both in sync.
    */
   private extractSilentSwitches(installCommand: string, installerType: string): string {
     const defaultSwitches: Record<string, string> = {
@@ -905,15 +1049,44 @@ ${steps}
       wix: '/qn /norestart',
       burn: '/q /norestart',
       msix: '',
+      appx: '',
+      portable: '',
     };
 
-    // Try to extract switches from the install command
-    const switchMatch = installCommand.match(/(?:\/\S+|-\S+)(?:\s+(?:\/\S+|-\S+))*/);
-    if (switchMatch && switchMatch[0] !== '-DeploymentType') {
-      return switchMatch[0];
+    const type = (installerType ?? '').toLowerCase();
+
+    // These types are never launched as a process so they take no switches.
+    // Their install commands are PowerShell cmdlets (Add-AppxPackage,
+    // Expand-Archive), not an installer invocation.
+    if (type === 'msix' || type === 'appx' || type === 'portable') {
+      return '';
     }
 
-    return defaultSwitches[installerType] || '/S';
+    // Strip the executable path first so that a hyphen inside a filename
+    // (7z2602-x64.exe, Git-2.55.0.2-64-bit.exe) is not read as a switch
+    let cleaned = installCommand
+      .replace(/^"[^"]+"\s*/, '') // quoted path
+      .replace(/^\S+\.(exe|msi|msix|appx)\s*/i, ''); // unquoted path
+
+    // Strip msiexec action switches and their targets:
+    // /i filename.msi, /x {GUID}, /p patch.msp, etc.
+    cleaned = cleaned
+      .replace(/\/[ixp]\s+"[^"]+"\s*/gi, '')
+      .replace(/\/[ixp]\s+\{[^}]+\}\s*/gi, '')
+      .replace(/\/[ixp]\s+\S+\.(msi|msp)\s*/gi, '')
+      .replace(/\/[ixp]\s+/gi, '');
+
+    // A switch must begin at a token boundary. Without the leading (?:^|\s)
+    // the hyphen inside a word is matched as a switch, so "Add-AppxPackage
+    // -Path x.msix" yields "-AppxPackage -Path".
+    const switchMatch = cleaned.match(
+      /(?:^|\s)((?:\/\S+|-{1,2}\S+)(?:\s+(?:\/\S+|-{1,2}\S+))*)/
+    );
+    if (switchMatch && switchMatch[1] !== '-DeploymentType') {
+      return switchMatch[1];
+    }
+
+    return defaultSwitches[type] ?? '/S';
   }
 
   /**
