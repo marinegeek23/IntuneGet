@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 
@@ -14,6 +15,9 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Profile image', { image: null });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -73,6 +77,9 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('Profile image');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     const { error } = await supabase
@@ -108,6 +115,9 @@ export async function DELETE(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Profile image');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

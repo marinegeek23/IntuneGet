@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { queryAuditLogs } from '@/lib/audit-logger';
@@ -30,6 +31,9 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management', { logs: [], count: 0 });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

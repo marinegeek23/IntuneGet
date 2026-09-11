@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
+import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
 import { getDatabase } from '@/lib/db';
 import {
   isGitHubActionsConfigured,
@@ -74,17 +74,28 @@ export async function POST(request: NextRequest) {
     const tokenTenantId = user.tenantId;
 
     // Check for MSP tenant override header and enforce tenant access checks
-    // (membership, managed tenant consent, and customer-only access mode)
-    const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
-    const { tenantId, errorResponse: tenantError } = await resolveTargetTenantId({
-      supabase: createServerClient(),
-      userId,
-      tokenTenantId,
-      requestedTenantId: mspTenantId,
-    });
+    // (membership, managed tenant consent, and customer-only access mode).
+    // Self-hosted sqlite deployments have no Supabase, which backs MSP
+    // membership/tenant resolution - createServerClient() would throw here.
+    // In that mode there's only ever the signed-in user's own tenant, so
+    // skip straight to it (same pattern as /api/auth/verify-consent and
+    // /api/intune/groups).
+    let tenantId = tokenTenantId;
 
-    if (tenantError) {
-      return tenantError;
+    if (isSupabaseConfigured()) {
+      const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
+      const resolution = await resolveTargetTenantId({
+        supabase: createServerClient(),
+        userId,
+        tokenTenantId,
+        requestedTenantId: mspTenantId,
+      });
+
+      if (resolution.errorResponse) {
+        return resolution.errorResponse;
+      }
+
+      tenantId = resolution.tenantId;
     }
 
     // Verify admin consent for the target tenant before accepting jobs
@@ -700,15 +711,20 @@ export async function GET(request: NextRequest) {
     // one tenant can see each other's IntuneGet apps and avoid duplicates).
     const scope = searchParams.get('scope');
     if (scope === 'tenant') {
-      const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
-      const { tenantId, errorResponse } = await resolveTargetTenantId({
-        supabase: createServerClient(),
-        userId: user.userId,
-        tokenTenantId: user.tenantId,
-        requestedTenantId: mspTenantId,
-      });
-      if (errorResponse) {
-        return errorResponse;
+      let tenantId = user.tenantId;
+
+      if (isSupabaseConfigured()) {
+        const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
+        const resolution = await resolveTargetTenantId({
+          supabase: createServerClient(),
+          userId: user.userId,
+          tokenTenantId: user.tenantId,
+          requestedTenantId: mspTenantId,
+        });
+        if (resolution.errorResponse) {
+          return resolution.errorResponse;
+        }
+        tenantId = resolution.tenantId;
       }
 
       const tenantJobs = await db.jobs.getByTenantId(tenantId, 50);

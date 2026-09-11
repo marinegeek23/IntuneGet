@@ -20,6 +20,11 @@ COPY . .
 
 # Build application
 ENV NEXT_TELEMETRY_DISABLED=1
+# Cap the V8 heap so the build garbage-collects under pressure instead of
+# growing until the kernel OOM-kills it. An uncapped Next.js build (webpack +
+# type check + static generation workers) will consume all available RAM and
+# die. Sized for the 8 GB VM; keep it comfortably under total memory.
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN npm run build:ci
 
 # Production stage

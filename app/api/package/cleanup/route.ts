@@ -5,7 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
+import { getDatabase } from '@/lib/db';
 
 // Jobs older than this (in minutes) in intermediate states will be marked as failed
 const STALE_JOB_TIMEOUT_MINUTES = 30;
@@ -26,21 +26,25 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const supabase = createServerClient();
+    // Use the database adapter so this works in both sqlite and Supabase modes
+    const db = getDatabase();
 
     // Calculate the cutoff time
     const cutoffTime = new Date(
       Date.now() - STALE_JOB_TIMEOUT_MINUTES * 60 * 1000
     ).toISOString();
 
-    // Find stale jobs
-    const { data: staleJobs, error: fetchError } = await supabase
-      .from('packaging_jobs')
-      .select('id, status, winget_id, updated_at, created_at')
-      .in('status', INTERMEDIATE_STATES)
-      .lt('updated_at', cutoffTime);
-
-    if (fetchError) {
+    // Find stale jobs: the shared adapter queries one status at a time, so
+    // gather each intermediate state and apply the age cutoff in memory.
+    let staleJobs;
+    try {
+      const perStatus = await Promise.all(
+        INTERMEDIATE_STATES.map((status) => db.jobs.getByStatus(status, 500))
+      );
+      staleJobs = perStatus
+        .flat()
+        .filter((job) => (job.updated_at || job.created_at) < cutoffTime);
+    } catch {
       return NextResponse.json(
         { error: 'Failed to fetch stale jobs' },
         { status: 500 }
@@ -56,19 +60,19 @@ export async function POST(request: NextRequest) {
     }
 
     // Mark stale jobs as failed
-    const jobIds = staleJobs.map((job) => job.id);
-
-    const { error: updateError } = await supabase
-      .from('packaging_jobs')
-      .update({
-        status: 'failed',
-        error_message: `Job timed out after ${STALE_JOB_TIMEOUT_MINUTES} minutes without progress. This may indicate a callback delivery failure or workflow crash.`,
-        completed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-      })
-      .in('id', jobIds);
-
-    if (updateError) {
+    try {
+      const now = new Date().toISOString();
+      await Promise.all(
+        staleJobs.map((job) =>
+          db.jobs.update(job.id, {
+            status: 'failed',
+            error_message: `Job timed out after ${STALE_JOB_TIMEOUT_MINUTES} minutes without progress. This may indicate a callback delivery failure or workflow crash.`,
+            completed_at: now,
+            updated_at: now,
+          })
+        )
+      );
+    } catch {
       return NextResponse.json(
         { error: 'Failed to update stale jobs' },
         { status: 500 }
@@ -109,16 +113,20 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    const supabase = createServerClient();
+    // Use the database adapter so this works in both sqlite and Supabase modes
+    const db = getDatabase();
 
-    // Get count of jobs by status
-    const { data: jobs, error } = await supabase
-      .from('packaging_jobs')
-      .select('status, updated_at')
-      .order('updated_at', { ascending: false })
-      .limit(100);
-
-    if (error) {
+    // Get a recent sample of jobs across the intermediate states plus the
+    // terminal ones, so the status histogram below stays representative.
+    let jobs;
+    try {
+      const sampled = await Promise.all(
+        [...INTERMEDIATE_STATES, 'deployed', 'failed', 'cancelled'].map((status) =>
+          db.jobs.getByStatus(status, 100)
+        )
+      );
+      jobs = sampled.flat();
+    } catch {
       return NextResponse.json(
         { error: 'Failed to fetch job stats' },
         { status: 500 }

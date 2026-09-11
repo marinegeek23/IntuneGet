@@ -6,6 +6,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseVersion } from '@/lib/version-compare';
 import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
+import { clearManifestCache } from '@/lib/manifest-api';
+import { computeUpdatesFromHistory } from '@/lib/updates/compute-updates';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
 import { GET as getLiveIntuneUpdates } from '@/app/api/intune/apps/updates/route';
@@ -53,10 +55,23 @@ export async function POST(request: NextRequest) {
     const requestedTenantId = body.tenant_id?.trim() || null;
 
     if (!isSupabaseConfigured()) {
-      return NextResponse.json(
-        { error: 'Update checking requires Supabase and is not available on this self-hosted deployment' },
-        { status: 503 }
+      // sqlite mode has no update_check_results cache to rebuild - detection is
+      // computed on demand from upload_history plus the live manifest. So a
+      // refresh is simply a recount: it clears the memoised manifest data so
+      // the next read is live, and reports what a fresh check finds. The client
+      // invalidates its query on success and re-reads /api/updates/available.
+      clearManifestCache();
+      const updates = await computeUpdatesFromHistory(
+        user.userId,
+        requestedTenantId,
+        false
       );
+      return NextResponse.json({
+        success: true,
+        refreshedCount: updates.length,
+        removedCount: 0,
+        updateCount: updates.length,
+      });
     }
 
     const supabase = createServerClient();

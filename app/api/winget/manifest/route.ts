@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getManifest, getInstallers, getBestInstaller, getPackage } from '@/lib/winget-api';
-import { fetchSimilarPackages, fetchAvailableVersions } from '@/lib/manifest-api';
+import { fetchSimilarPackages, fetchAvailableVersions, fetchAvailableVersionsLive } from '@/lib/manifest-api';
 
 
 export async function GET(request: NextRequest) {
@@ -59,9 +59,22 @@ export async function GET(request: NextRequest) {
       ? await getBestInstaller(packageId, version || manifest.Version, architecture)
       : installers[0] || null;
 
-    // List of all available versions (Supabase-backed) so the catalog can offer
+    // List of all available versions (catalog-backed) so the catalog can offer
     // a version selector. Best-effort: an empty list just hides the selector.
-    const versions = await fetchAvailableVersions(packageId);
+    let versions = await fetchAvailableVersions(packageId);
+
+    // The catalog snapshot lags upstream, and publishers that prune old
+    // manifests (browsers especially) can leave every version it lists dead.
+    // Serving those would let the user pick a version whose manifest no longer
+    // exists, which dispatch preflight then rejects as untrusted. If the
+    // resolved manifest version is absent from the catalog list, treat the
+    // snapshot as stale for this package and use the live list instead.
+    if (manifest.Version && !versions.includes(manifest.Version)) {
+      const liveVersions = await fetchAvailableVersionsLive(packageId);
+      versions = liveVersions.length > 0
+        ? liveVersions
+        : [manifest.Version, ...versions];
+    }
 
     return NextResponse.json({
       manifest: {

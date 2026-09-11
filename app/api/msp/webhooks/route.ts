@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { hasPermission, type MspRole } from '@/lib/msp-permissions';
@@ -43,6 +44,9 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management', { webhooks: [] });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -106,6 +110,9 @@ export async function POST(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

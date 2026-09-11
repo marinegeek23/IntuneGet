@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import type { AppUpdatePolicy, UpdatePolicyType } from '@/types/update-policies';
@@ -32,6 +33,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const { id } = await params;
+    const guard = supabaseOnlyGuard('Update policies');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Get policy by ID, ensuring it belongs to the user
@@ -83,6 +87,9 @@ export async function PATCH(request: NextRequest, { params }: RouteParams) {
 
     const { id } = await params;
     const body = await request.json();
+
+    const guard = supabaseOnlyGuard('Update policies');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -192,6 +199,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     const { id } = await params;
+    const guard = supabaseOnlyGuard('Update policies');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Delete the policy (only if it belongs to the user)

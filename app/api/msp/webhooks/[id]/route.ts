@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { hasPermission, type MspRole } from '@/lib/msp-permissions';
@@ -83,6 +84,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       );
     }
 
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Get user's membership
@@ -149,6 +153,9 @@ export async function PUT(request: NextRequest, context: RouteContext) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -318,6 +325,9 @@ export async function DELETE(request: NextRequest, context: RouteContext) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

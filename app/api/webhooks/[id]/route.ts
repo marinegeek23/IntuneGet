@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { validateWebhookUrl } from '@/lib/webhooks/service';
@@ -37,6 +38,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
     }
 
     const { id } = await params;
+
+    const guard = supabaseOnlyGuard('Webhooks');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -114,6 +118,9 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Webhooks');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -193,6 +200,9 @@ export async function DELETE(request: NextRequest, { params }: RouteParams) {
     }
 
     const { id } = await params;
+
+    const guard = supabaseOnlyGuard('Webhooks');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

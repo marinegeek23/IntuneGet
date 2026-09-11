@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getCatalogSource } from '@/lib/catalog';
 import { parseAccessToken } from '@/lib/auth-utils';
@@ -48,6 +49,9 @@ export async function GET(request: NextRequest, { params }: RouteParams) {
 
     // Decode the app ID (it might be URL encoded)
     const decodedAppId = decodeURIComponent(appId);
+
+    const guard = supabaseOnlyGuard('App ratings', { stats: { total_ratings: 0, average_rating: 0, successful_deployments: 0 }, userRating: null });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -159,6 +163,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     const { rating, comment, deployment_success } = validation.data;
+
+    const guard = supabaseOnlyGuard('App ratings');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

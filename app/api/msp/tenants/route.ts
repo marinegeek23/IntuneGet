@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getMspCustomerConsentUrl } from '@/lib/msal-config';
 import { parseAccessToken, signConsentState, getBaseUrl } from '@/lib/auth-utils';
@@ -82,6 +83,9 @@ export async function GET(request: NextRequest) {
         { status: 403 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management', { tenants: [] });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -208,6 +212,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Create a pending tenant record
@@ -308,6 +315,9 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

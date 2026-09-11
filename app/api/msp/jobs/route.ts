@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import type { MspJob, GetMspJobsResponse } from '@/types/msp';
@@ -47,6 +48,9 @@ export async function GET(request: NextRequest) {
     const tenantId = searchParams.get('tenantId'); // Optional: filter by specific tenant
     const status = searchParams.get('status'); // Optional: filter by status
     const offset = (page - 1) * limit;
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management', { jobs: [] });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

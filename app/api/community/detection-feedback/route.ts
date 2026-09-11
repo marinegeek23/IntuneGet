@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getCatalogSource } from '@/lib/catalog';
 import { parseAccessToken } from '@/lib/auth-utils';
@@ -55,6 +56,9 @@ export async function POST(request: NextRequest) {
     }
 
     const { app_id, feedback_type, description, environment_info } = validation.data;
+
+    const guard = supabaseOnlyGuard('Community detection feedback');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -145,6 +149,9 @@ export async function GET(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('Community detection feedback', { feedback: [] });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

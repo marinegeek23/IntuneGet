@@ -10,8 +10,8 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
-import { resolveTargetTenantId } from '@/lib/msp/tenant-resolution';
+import { resolveTenantForRequest, hasActiveTenantConsent } from '@/lib/msp/tenant-resolution';
+import { createServerClient, isSupabaseConfigured } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import {
   GRAPH_API_BASE,
@@ -126,11 +126,9 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Missing appId parameter' }, { status: 400 });
     }
 
-    const supabase = createServerClient();
     const mspTenantId = request.headers.get('X-MSP-Tenant-Id');
 
-    const tenantResolution = await resolveTargetTenantId({
-      supabase,
+    const tenantResolution = await resolveTenantForRequest({
       userId: user.userId,
       tokenTenantId: user.tenantId,
       requestedTenantId: mspTenantId,
@@ -143,14 +141,7 @@ export async function GET(request: NextRequest) {
     const tenantId = tenantResolution.tenantId;
 
     // Verify admin consent (mirrors the unmanaged-apps route)
-    const { data: consentData, error: consentError } = await supabase
-      .from('tenant_consent')
-      .select('*')
-      .eq('tenant_id', tenantId)
-      .eq('is_active', true)
-      .single();
-
-    if (consentError || !consentData) {
+    if (!(await hasActiveTenantConsent(tenantId))) {
       return NextResponse.json(
         { error: 'Admin consent not found. Please complete the admin consent flow.' },
         { status: 403 }
@@ -160,12 +151,19 @@ export async function GET(request: NextRequest) {
     // Resolve the full set of detected-app (version) ids for this app from the
     // sync cache; fall back to the single id for rows written before this field
     // existed or evicted rows.
-    const { data: cacheRow } = await supabase
-      .from('discovered_apps_cache')
-      .select('app_data, device_count')
-      .eq('tenant_id', tenantId)
-      .eq('discovered_app_id', appId)
-      .maybeSingle();
+    // discovered_apps_cache only exists in Supabase. In sqlite mode there is no
+    // sync cache, which lands on the same fallback this code already handles
+    // for evicted/legacy rows: the single requested app id.
+    const cacheRow = isSupabaseConfigured()
+      ? (
+          await createServerClient()
+            .from('discovered_apps_cache')
+            .select('app_data, device_count')
+            .eq('tenant_id', tenantId)
+            .eq('discovered_app_id', appId)
+            .maybeSingle()
+        ).data
+      : null;
 
     const appData = (cacheRow?.app_data ?? null) as unknown as { mergedAppIds?: string[] } | null;
     const allVersionIds =

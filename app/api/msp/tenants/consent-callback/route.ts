@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { verifyConsentState, getBaseUrl } from '@/lib/auth-utils';
 import { acquireConsentToken } from '@/lib/consent-token';
@@ -96,6 +97,9 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
+
     const supabase = createServerClient();
 
     // Verify the tenant record exists and belongs to the MSP org

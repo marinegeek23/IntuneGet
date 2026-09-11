@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { DEFAULT_USER_SETTINGS } from '@/types/user-settings';
@@ -76,6 +77,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const guard = supabaseOnlyGuard('User settings', { settings: DEFAULT_USER_SETTINGS, hasStoredSettings: false });
+    if (guard) return guard;
+
     const supabase = createServerClient() as ReturnType<typeof createServerClient> & {
       from: (relation: string, ...args: unknown[]) => any;
     };
@@ -140,6 +144,9 @@ export async function PATCH(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('User settings');
+    if (guard) return guard;
 
     const supabase = createServerClient() as ReturnType<typeof createServerClient> & {
       from: (relation: string, ...args: unknown[]) => any;

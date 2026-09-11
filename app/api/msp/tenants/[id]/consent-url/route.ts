@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { getMspCustomerConsentUrl } from '@/lib/msal-config';
 import { parseAccessToken, signConsentState, getBaseUrl } from '@/lib/auth-utils';
@@ -71,6 +72,9 @@ export async function POST(
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

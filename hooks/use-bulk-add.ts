@@ -63,7 +63,15 @@ export function useBulkAdd(): UseBulkAddReturn {
               throw new Error('No compatible installer found');
             }
 
-            const detectionRules = generateDetectionRules(installer, pkg.name, pkg.id, pkg.version);
+            // The manifest is requested without a version, so it resolves the
+            // current one - and `installer` belongs to *that* version, not to
+            // pkg.version, which comes from the catalog snapshot and lags
+            // upstream. Pairing the two produced a cart entry whose version and
+            // SHA256 were from different releases, which dispatch preflight
+            // then rejected as not matching the trusted manifest.
+            const resolvedVersion: string = data.manifest?.version || pkg.version;
+
+            const detectionRules = generateDetectionRules(installer, pkg.name, pkg.id, resolvedVersion);
             const processesToClose = getDefaultProcessesToClose(pkg.name, installer.type);
 
             addItemSilent({
@@ -72,7 +80,7 @@ export function useBulkAdd(): UseBulkAddReturn {
               displayName: pkg.name,
               publisher: pkg.publisher,
               description: pkg.description,
-              version: pkg.version,
+              version: resolvedVersion,
               architecture: installer.architecture,
               installScope: installer.scope || 'machine',
               installerType: installer.type,

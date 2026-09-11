@@ -4,6 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
 import { sendTestWebhook } from '@/lib/webhooks/service';
@@ -32,6 +33,9 @@ export async function POST(request: NextRequest, { params }: RouteParams) {
     }
 
     const { id } = await params;
+
+    const guard = supabaseOnlyGuard('Webhooks');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 

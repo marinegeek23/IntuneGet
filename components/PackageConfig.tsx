@@ -82,6 +82,12 @@ interface PackageConfigProps {
   package: NormalizedPackage;
   installers: NormalizedInstaller[];
   versions?: string[];
+  // Version the `installers` above actually came from. The catalog snapshot's
+  // latest_version scalar goes stale (and can even disagree with the catalog's
+  // own version history), so pairing it with live installer data produces a
+  // cart entry whose version and SHA256 belong to different releases - which
+  // dispatch preflight then rejects. Always prefer this.
+  manifestVersion?: string;
   onClose: () => void;
   isDeployed?: boolean;
   deployedConfig?: CartItem | null;
@@ -104,16 +110,27 @@ type ConfigSection =
   | 'branding'
   | 'advanced';
 
-export function PackageConfig({ package: pkg, installers, versions = [], onClose, isDeployed = false, deployedConfig, intuneAppId, storeManifest }: PackageConfigProps) {
+export function PackageConfig({ package: pkg, installers, versions = [], manifestVersion, onClose, isDeployed = false, deployedConfig, intuneAppId, storeManifest }: PackageConfigProps) {
   const isStoreApp = pkg.appSource === 'store';
 
   // Store app install experience state
   const [storeInstallExperience, setStoreInstallExperience] = useState<'user' | 'system'>('user');
 
   // Selection state - pre-fill from deployed config when available
+  // The version that `installers` belongs to; falls back to the catalog value
+  // only when the manifest did not report one.
+  const defaultVersion = manifestVersion || pkg.version;
   const [selectedVersion, setSelectedVersion] = useState(
-    deployedConfig?.version || pkg.version
+    deployedConfig?.version || defaultVersion
   );
+  // Whether the user picked a version from the selector. Until they do, the
+  // selection must follow the resolved manifest rather than stay pinned to
+  // whatever was known at first render: React Query serves cached data while
+  // revalidating, so the initial manifestVersion can be a previously-cached
+  // (older) release. Leaving the version frozen there while `installers`
+  // refreshes to the current release is what produced cart entries whose
+  // version and SHA256 came from different versions.
+  const [versionExplicitlyChosen, setVersionExplicitlyChosen] = useState(false);
   const [selectedArch, setSelectedArch] = useState<WingetArchitecture>(() => {
     const win32Config = deployedConfig && 'architecture' in deployedConfig ? deployedConfig : null;
     const preferred = win32Config?.architecture || 'x64';
@@ -141,6 +158,14 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
   // Cached for 5 minutes via React Query staleTime.
   const { data: variantData, isSuccess: variantsLoaded } = useLocaleVariants(pkg.id);
   const localeVariants = variantsLoaded ? (variantData?.variants ?? []) : (pkg.localeVariants ?? []);
+
+  // Keep the version aligned with the manifest the installers came from,
+  // unless the user chose a version or we are editing an existing deployment.
+  useEffect(() => {
+    if (versionExplicitlyChosen || deployedConfig) return;
+    if (!defaultVersion || selectedVersion === defaultVersion) return;
+    setSelectedVersion(defaultVersion);
+  }, [defaultVersion, selectedVersion, versionExplicitlyChosen, deployedConfig]);
 
   // Clear stale selectedLocale if it doesn't exist in the resolved variants
   useEffect(() => {
@@ -263,17 +288,33 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
   // user selects a different version we must re-fetch so the installer URL/SHA
   // (which flow straight into the cart item) match the chosen version rather than
   // silently deploying the latest binary under an older version label.
-  const isNonDefaultVersion = !isStoreApp && !!selectedVersion && selectedVersion !== pkg.version;
+  const isNonDefaultVersion = !isStoreApp && !!selectedVersion && selectedVersion !== defaultVersion;
   const { data: versionManifest, isFetching: isFetchingVersionInstallers } = usePackageManifest(
     pkg.id,
     selectedVersion,
     undefined,
     !isNonDefaultVersion
   );
-  const effectiveInstallers =
-    isNonDefaultVersion && versionManifest?.installers?.length
-      ? versionManifest.installers
-      : installers;
+  // Invariant: the installers on screen must always belong to selectedVersion.
+  // When a non-default version is selected, use only that version's manifest -
+  // never fall back to the default version's installers, which would let the
+  // user add a cart item whose SHA256 belongs to a different release than its
+  // version. An empty list leaves selectedInstaller undefined, which disables
+  // the add button until the correct manifest arrives.
+  const effectiveInstallers = isNonDefaultVersion
+    ? (versionManifest?.installers ?? [])
+    : installers;
+
+  // The version that effectiveInstallers actually came from. The cart item must
+  // be built from this, not from selectedVersion: selectedVersion is separate
+  // state that can lag the manifest (React Query serves cached data while
+  // revalidating), and pairing it with freshly-fetched installers yields an
+  // entry whose version and SHA256 belong to different releases. Reading the
+  // version off the same response as the installers makes them consistent by
+  // construction rather than by timing.
+  const installerSourceVersion = isNonDefaultVersion
+    ? (versionManifest?.manifest?.version || selectedVersion)
+    : (manifestVersion || pkg.version);
 
   // Get selected installer (not relevant for store apps)
   const selectedInstaller = effectiveInstallers.find((i) => i.architecture === selectedArch) || effectiveInstallers[0];
@@ -363,7 +404,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
         selectedInstaller,
         pkg.name,
         effectiveWingetId,
-        selectedVersion,
+        installerSourceVersion,
         config.registryMarkerPath
       );
       setConfig((prev) => ({
@@ -371,7 +412,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
         detectionRules: rules,
       }));
     }
-  }, [selectedInstaller, pkg.name, effectiveWingetId, selectedVersion, config.registryMarkerPath]);
+  }, [selectedInstaller, pkg.name, effectiveWingetId, installerSourceVersion, config.registryMarkerPath]);
 
   const handleAddToCart = async () => {
     if (addedToCartSuccess) return;
@@ -392,7 +433,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
           pkg.packageIdentifier || pkg.id,
           pkg.name,
           storeManifest?.publisher || pkg.publisher,
-          selectedVersion,
+          installerSourceVersion,
           storeInstallExperience,
           {
             description: storeManifest?.description || pkg.description,
@@ -424,7 +465,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
           displayName,
           publisher: pkg.publisher,
           description: description.trim() || pkg.description,
-          version: selectedVersion,
+          version: installerSourceVersion,
           architecture: selectedInstaller!.architecture,
           installScope: selectedScope,
           installerType: selectedInstaller!.type,
@@ -693,6 +734,7 @@ export function PackageConfig({ package: pkg, installers, versions = [], onClose
                           type="button"
                           key={version}
                           onClick={() => {
+                            setVersionExplicitlyChosen(true);
                             setSelectedVersion(version);
                             setShowVersions(false);
                           }}

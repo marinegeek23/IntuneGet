@@ -4,6 +4,7 @@
  */
 
 import crypto from 'crypto';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import { NextRequest, NextResponse } from 'next/server';
 import { createServerClient } from '@/lib/supabase';
 import { addIssueComment, closeIssueWithLabel } from '@/lib/github-issues';
@@ -86,6 +87,9 @@ export async function POST(request: NextRequest) {
   const { status, label } = VALID_COMMANDS[command as keyof typeof VALID_COMMANDS];
 
   // Look up the suggestion in Supabase
+  const guard = supabaseOnlyGuard('GitHub webhook intake');
+  if (guard) return guard;
+
   const supabase = createServerClient();
   const { data: suggestion, error: lookupError } = await supabase
     .from('app_suggestions')

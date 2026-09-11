@@ -22,6 +22,11 @@ services:
       # API key for packager authentication when using SQLite mode
       # Generate with: openssl rand -hex 32
       - PACKAGER_API_KEY=${PACKAGER_API_KEY:-}
+      # Version retention (see lib/intune/version-retention.ts). Dry run by default.
+      - INTUNEGET_RETENTION_KEEP=${INTUNEGET_RETENTION_KEEP:-2}
+      - INTUNEGET_RETENTION_DRY_RUN=${INTUNEGET_RETENTION_DRY_RUN:-true}
+      # Max installer size preflight will hash (streamed). 8 GiB = Intune's Win32 ceiling.
+      - INSTALLER_PREFLIGHT_MAX_BYTES=${INSTALLER_PREFLIGHT_MAX_BYTES:-8589934592}
 
       # ===========================================
       # Supabase Configuration (optional in SQLite mode)
@@ -75,7 +80,10 @@ services:
       - intuneget-data:/data
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      # Use 127.0.0.1, not localhost: the container resolves localhost to ::1
+      # first, but Next.js binds IPv4-only (0.0.0.0:3000), so wget would get
+      # ECONNREFUSED and the container would sit permanently "unhealthy".
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3

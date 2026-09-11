@@ -4,7 +4,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { createServerClient } from '@/lib/supabase';
+import { getDatabase } from '@/lib/db';
 import { parseAccessToken } from '@/lib/auth-utils';
 
 export async function GET(request: NextRequest) {
@@ -31,7 +31,8 @@ export async function GET(request: NextRequest) {
       now.getUTCDate() - days
     ));
 
-    const supabase = createServerClient();
+    // Use the database adapter so this works in both sqlite and Supabase modes
+    const db = getDatabase();
 
     // Define the shape of jobs returned from the query
     interface PackagingJobExport {
@@ -49,28 +50,15 @@ export async function GET(request: NextRequest) {
       completed_at: string | null;
     }
 
-    // Get all jobs in date range
-    const { data: jobs, error: jobsError } = await supabase
-      .from('packaging_jobs')
-      .select(`
-        id,
-        winget_id,
-        display_name,
-        publisher,
-        version,
-        architecture,
-        installer_type,
-        status,
-        error_message,
-        intune_app_id,
-        created_at,
-        completed_at
-      `)
-      .eq('user_id', user.userId)
-      .gte('created_at', startDate.toISOString())
-      .order('created_at', { ascending: false });
-
-    if (jobsError) {
+    // Get all jobs in date range. The adapter returns the user's jobs most
+    // recent first; the date window is applied in memory since the shared
+    // interface has no range filter.
+    let jobs;
+    try {
+      const startIso = startDate.toISOString();
+      const allUserJobs = await db.jobs.getByUserId(user.userId, 1000);
+      jobs = allUserJobs.filter((job) => job.created_at >= startIso);
+    } catch {
       return NextResponse.json(
         { error: 'Failed to fetch data for export' },
         { status: 500 }
@@ -93,7 +81,7 @@ export async function GET(request: NextRequest) {
       'Completed At',
     ];
 
-    const allJobs = (jobs || []) as PackagingJobExport[];
+    const allJobs = (jobs || []) as unknown as PackagingJobExport[];
     const rows = allJobs.map((job) => [
       job.id,
       job.winget_id,

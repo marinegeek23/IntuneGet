@@ -5,6 +5,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { supabaseOnlyGuard } from '@/lib/api/supabase-only';
 import crypto from 'crypto';
 import { createServerClient } from '@/lib/supabase';
 import { parseAccessToken } from '@/lib/auth-utils';
@@ -85,6 +86,9 @@ export async function GET(request: NextRequest) {
         { status: 401 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management', { invitations: [] });
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -189,6 +193,9 @@ export async function POST(request: NextRequest) {
     }
 
     const { email, role, access_mode } = validation.data;
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
@@ -386,6 +393,9 @@ export async function DELETE(request: NextRequest) {
         { status: 400 }
       );
     }
+
+    const guard = supabaseOnlyGuard('MSP multi-tenant management');
+    if (guard) return guard;
 
     const supabase = createServerClient();
 
