@@ -525,6 +525,9 @@ export async function POST(request: NextRequest) {
         const dispatchResults = await Promise.allSettled(
           pendingDispatches.map(async ({ item, jobId, createdAt }) => {
             const installerSha256 = item.installerSha256?.trim() || '';
+            // Same resolution the job row was created with - deterministic for
+            // a given item, so the dispatched inputs and the row agree.
+            const detectionRules = resolveDetectionRules(item);
             const workflowInputs: WorkflowInputs = {
               jobId,
               tenantId,
