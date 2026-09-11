@@ -887,16 +887,23 @@ ${placeLine}
       return "Write-ADTLogEntry -Message 'No uninstall command specified' -Severity 'Warning' -Source 'Uninstall-ADTDeployment'";
     }
 
-    // MSIX/APPX uninstall sentinel emitted by the web app in place of a command
+    const installerType = (job.installer_type ?? '').toLowerCase();
+
+    // MSIX/APPX uninstall sentinel emitted by the web app in place of a
+    // command. Honored only when the package really was installed as MSIX:
+    // a winget package offering both an MSI and an MSIX installer (Microsoft
+    // .PowerShell) can be deployed from the MSI while still carrying this
+    // sentinel, and removing it as an Appx would find nothing. Falling
+    // through reaches the registry lookup, which matches how it installed.
     const msixUninstall = job.uninstall_command.match(/^MSIX_UNINSTALL:(.+)$/);
-    if (msixUninstall) {
+    if (msixUninstall && (installerType === 'msix' || installerType === 'appx')) {
       return this.getMsixUninstallCommand(msixUninstall[1]);
     }
 
     // Portable apps are just a folder on disk - there is no uninstaller to run.
     // Checked by type because these carry a REGISTRY_UNINSTALL sentinel that
     // can never match (nothing registers an uninstall entry for them).
-    if ((job.installer_type ?? '').toLowerCase() === 'portable') {
+    if (installerType === 'portable') {
       return this.getPortableUninstallCommand(job);
     }
 
@@ -906,6 +913,13 @@ ${placeLine}
     const registryUninstall = job.uninstall_command.match(/^REGISTRY_UNINSTALL:(.+)$/);
     if (registryUninstall) {
       return this.getRegistryUninstallCommand(job, registryUninstall[1]);
+    }
+
+    // An MSIX sentinel on a package installed some other way: the name it
+    // carries is a package identifier rather than a registry DisplayName, so
+    // the lookup misses and the winget fallback by ID resolves it.
+    if (msixUninstall) {
+      return this.getRegistryUninstallCommand(job, msixUninstall[1]);
     }
 
     // MSI uninstall: use the product code with Start-ADTMsiProcess
