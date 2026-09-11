@@ -877,6 +877,13 @@ ${placeLine}
     const nestedPathEscaped = nested.path.replace(/'/g, "''");
     const nestedType = (nested.type ?? '').toLowerCase();
 
+    // A zip whose payload is portable has nothing to run - the archive is the
+    // app. getPortableInstallCommand expands a .zip into the install
+    // directory and puts it on PATH, which is exactly the right handling.
+    if (nestedType === 'portable') {
+      return this.getPortableInstallCommand(job, fileName);
+    }
+
     // The job's install command describes extracting the archive, not running
     // what is inside it, so it carries no usable switches. Fall back to the
     // silent switches for the nested installer's own type.
@@ -888,8 +895,6 @@ ${placeLine}
       executeLine = msiProperties
         ? `Start-ADTMsiProcess -Action 'Install' -FilePath $nestedInstallerPath -AdditionalArgumentList '${msiProperties}'`
         : `Start-ADTMsiProcess -Action 'Install' -FilePath $nestedInstallerPath`;
-    } else if (nestedType === 'portable') {
-      executeLine = 'throw "Portable nested installers are not supported yet"';
     } else {
       executeLine = `Start-ADTProcess -FilePath $nestedInstallerPath -ArgumentList '${effectiveSwitches}' -WindowStyle Hidden -WaitForMsiExec`;
     }
@@ -944,7 +949,7 @@ ${placeLine}
     // Portable apps are just a folder on disk - there is no uninstaller to run.
     // Checked by type because these carry a REGISTRY_UNINSTALL sentinel that
     // can never match (nothing registers an uninstall entry for them).
-    if (installerType === 'portable') {
+    if (this.hasPortablePayload(job)) {
       return this.getPortableUninstallCommand(job);
     }
 
@@ -1057,6 +1062,20 @@ ${removal}
         ''
       )
       .trim();
+  }
+
+  /**
+   * Whether the job's payload is placed on disk rather than installed by an
+   * installer - either a portable app, or a zip declaring a portable nested
+   * installer. Nothing registers an uninstall entry for these, so the
+   * REGISTRY_UNINSTALL sentinel they carry can never match.
+   */
+  private hasPortablePayload(job: PackagingJob): boolean {
+    const type = (job.installer_type ?? '').toLowerCase();
+    if (type === 'portable') {
+      return true;
+    }
+    return type === 'zip' && (this.getNestedInstaller(job).type ?? '').toLowerCase() === 'portable';
   }
 
   /**
