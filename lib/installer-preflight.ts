@@ -359,11 +359,31 @@ async function performLivePreflight(
   } catch (error) {
     if (error instanceof InstallerPreflightError && !error.retryable) throw error;
 
+    // Exceeding the size cap is a permanent property of the installer, not a
+    // transient fault - reporting it as "temporarily unavailable" invites a
+    // retry that can never succeed. Surface it as its own non-retryable code
+    // with the operator action attached.
+    const rawMessage = error instanceof Error ? error.message : '';
+    if (/exceeds the \d+-byte preflight limit/.test(rawMessage)) {
+      const sizeError = new InstallerPreflightError(
+        'INSTALLER_TOO_LARGE',
+        `${input.wingetId} ${input.version} is larger than the installer verification limit. ` +
+          'Raise INSTALLER_PREFLIGHT_MAX_BYTES on the server to allow it.',
+        false,
+      );
+      await writeHealth(buildHealthRow(cacheKey, input, 'error', {
+        reason_code: sizeError.code,
+        reason_message: sizeError.message,
+        expires_at: new Date(Date.now() + ERROR_TTL_MS).toISOString(),
+      }));
+      throw sizeError;
+    }
+
     const normalized = error instanceof InstallerPreflightError
       ? error
       : new InstallerPreflightError(
           'PREFLIGHT_UNAVAILABLE',
-          error instanceof Error ? error.message : 'Installer verification failed',
+          rawMessage || 'Installer verification failed',
           true,
         );
 
