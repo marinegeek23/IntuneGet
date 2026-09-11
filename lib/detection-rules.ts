@@ -256,12 +256,19 @@ function generateMsixDetectionScript(packageFamilyName: string): string {
   // Extract the package name (before the underscore in family name)
   const packageName = packageFamilyName.split('_')[0];
 
+  // -AllUsers also returns packages that are merely staged: provisioned into
+  // the image but never registered into a profile. Matching those reports the
+  // app installed on a machine where nobody can launch it, and - worse - stops
+  // Intune from ever running the install that would register it. Require a
+  // user it is actually installed for.
   const lines = [
     '# MSIX Detection Script',
     `# Package Family Name: ${packageFamilyName}`,
     '',
     '$ErrorActionPreference = "SilentlyContinue"',
-    `$package = Get-AppxPackage -Name "*${packageName}*" -AllUsers`,
+    `$package = Get-AppxPackage -Name "*${packageName}*" -AllUsers | Where-Object {`,
+    '    $_.PackageUserInformation | Where-Object { $_.InstallState -eq "Installed" }',
+    '}',
     'if ($package) {',
     '    Write-Output "Installed"',
     '    exit 0',
